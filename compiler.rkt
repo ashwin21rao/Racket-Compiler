@@ -1,5 +1,6 @@
 #lang racket
-(require racket/set racket/stream)
+(require racket/set
+         racket/stream)
 (require racket/dict)
 (require racket/fixnum)
 (require "interp-Lint.rkt")
@@ -24,7 +25,6 @@
 (define (flip-Lint e)
   (match e
     [(Program info e) (Program info (flip-exp e))]))
-
 
 ;; Next we have the partial evaluation pass described in the book.
 (define (pe-neg r)
@@ -52,19 +52,26 @@
 ;; HW1 Passes
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
+#| (define (uniquify-exp env) |#
+#|   (lambda (e) |#
+#|     (match e |#
+#|       [(Var x) (Var x)] |#
+#|       [(Int n) (Int n)] |#
+#|       [(Let x e body) (Let x ((uniquify-exp env) e) ((uniquify-exp env) body))] |#
+#|       [(Prim op es) (Prim op |#
+#|                           (for/list ([e es]) |#
+#|                             ((uniquify-exp env) e)))]))) |#
+
 (define (uniquify-exp env)
   (lambda (e)
     (match e
-      [(Var x)
-       (Var (dict-ref env x))]
+      [(Var x) (Var (dict-ref env x))]
       [(Int n) (Int n)]
-      [(Let x e body) (
-        (let* ([new_x (gensym x)]
-               [new_env (dict-set env x new_x)]
-               ) 
-          (Let new_x ((uniquify-exp new_env) e) ((uniquify-exp new_env) body))))]
-      [(Prim op es)
-       (Prim op (for/list ([e es]) ((uniquify-exp env) e)))])))
+      [(Let x e body) (let* ([new_x (gensym x)] [new_env (dict-set env x new_x)])
+                         (Let new_x ((uniquify-exp new_env) e) ((uniquify-exp new_env) body)))]
+      [(Prim op es) (Prim op
+                          (for/list ([e es])
+                            ((uniquify-exp env) e)))])))
 
 ;; uniquify : R1 -> R1
 (define (uniquify p)
@@ -99,13 +106,12 @@
 ;; Note that your compiler file (the file that defines the passes)
 ;; must be named "compiler.rkt"
 (define compiler-passes
-  `( ("uniquify" ,uniquify ,interp-Lvar)
-     ;; Uncomment the following passes as you finish them.
-     ;; ("remove complex opera*" ,remove-complex-opera* ,interp-Lvar)
-     ;; ("explicate control" ,explicate-control ,interp-Cvar)
-     ;; ("instruction selection" ,select-instructions ,interp-x86-0)
-     ;; ("assign homes" ,assign-homes ,interp-x86-0)
-     ;; ("patch instructions" ,patch-instructions ,interp-x86-0)
-     ;; ("prelude-and-conclusion" ,prelude-and-conclusion ,interp-x86-0)
-     ))
-
+  `(("uniquify" ,uniquify ,interp-Lvar)
+    ;; Uncomment the following passes as you finish them.
+    ;; ("remove complex opera*" ,remove-complex-opera* ,interp-Lvar)
+    ;; ("explicate control" ,explicate-control ,interp-Cvar)
+    ;; ("instruction selection" ,select-instructions ,interp-x86-0)
+    ;; ("assign homes" ,assign-homes ,interp-x86-0)
+    ;; ("patch instructions" ,patch-instructions ,interp-x86-0)
+    ;; ("prelude-and-conclusion" ,prelude-and-conclusion ,interp-x86-0)
+    ))
