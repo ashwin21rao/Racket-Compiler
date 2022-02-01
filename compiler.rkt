@@ -109,7 +109,7 @@
 #|     [(list (list a b) ...) (Let a b (gen-lets (rest lst)))] |#
 #|   )) |#
 ;; ((temp, (+ 20 10)))
-(require racket/trace)
+(require racket/trace)	
 (trace-define (gen-lets lst)
   (cond 
     [(= 1 (length lst)) (cadar lst)]
