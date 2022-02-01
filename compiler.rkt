@@ -113,7 +113,7 @@
 (trace-define (gen-lets lst)
   (cond 
     [(= 1 (length lst)) (cadar lst)]
-    [else (Let (caar lst) (cdar lst) (gen-lets (rest lst)))]
+    [else (Let (caar lst) (cadar lst) (gen-lets (rest lst)))]
     ))
 
 (define (rco-exp e)
