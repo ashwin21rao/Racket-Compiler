@@ -87,9 +87,10 @@
                 [(Var x) (cons (Var x) '())]
                 [(Int x) (cons (Int x) '())]
                 [(Let x e body)
-                 (let* ([new_var (Var (gensym 'temp))]
+                 (let* ([new_sym (gensym 'temp)]
+                        [new_var (Var new_sym)]
                         [list_1 (list x (rco-exp e))]
-                        [list_2 (list new_var (rco-exp body))]
+                        [list_2 (list new_sym (rco-exp body))]
                         [list_3 (append (list list_1) (list list_2))])
                     (cons new_var list_3))]
                 [(Prim op (list exp1 exp2)) (let* ([pair_data_1 (rco-atom exp1)]
@@ -98,17 +99,19 @@
                                                    [atom2 (car pair_data_2)]
                                                    [vs1 (cdr pair_data_1)]
                                                    [vs2 (cdr pair_data_2)]
-                                                   [new_var (Var (gensym 'temp))]
+                                                   [new_sym (gensym 'temp)]
+                                                   [new_var (Var new_sym)]
                                                    [new_prim (Prim op (list atom1 atom2))]
-                                                   [new_ele (list new_var new_prim)]
+                                                   [new_ele (list new_sym new_prim)]
                                                    [new_vs (append vs1 vs2 (list new_ele))])
                                               (cons new_var new_vs))]
                 [(Prim op (list exp1)) (let* ([pair_data_1 (rco-atom exp1)]
                                               [atom1 (car pair_data_1)]
                                               [vs1 (cdr pair_data_1)]
-                                              [new_var (Var (gensym 'temp))]
+                                              [new_sym (gensym 'temp)]
+                                              [new_var (Var new_sym)]
                                               [new_prim (Prim op (list atom1))]
-                                              [new_ele (list new_var new_prim)]
+                                              [new_ele (list new_sym new_prim)]
                                               [new_vs (append vs1 (list new_ele))])
                                          (cons new_var new_vs))]))
 
