@@ -68,7 +68,7 @@
       [(Var x) (Var (dict-ref env x))]
       [(Int n) (Int n)]
       [(Let x e body) (let* ([new_x (gensym x)] [new_env (dict-set env x new_x)])
-                         (Let new_x ((uniquify-exp new_env) e) ((uniquify-exp new_env) body)))]
+                         (Let new_x ((uniquify-exp env) e) ((uniquify-exp new_env) body)))]
       [(Prim op es) (Prim op
                           (for/list ([e es])
                             ((uniquify-exp env) e)))])))
