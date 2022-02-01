@@ -55,10 +55,13 @@
   (lambda (e)
     (match e
       [(Var x)
-       (error "TODO: code goes here (uniquify-exp, symbol?)")]
+       (Var (cdr (assoc x (reverse env))))]
       [(Int n) (Int n)]
-      [(Let x e body)
-       (error "TODO: code goes here (uniquify-exp, let)")]
+      [(Let x e body) (
+        (let* ([new_x (gensym x)]
+               [new_env (append env (list (list x new_x)))]
+               ) 
+          (Let new_x ((uniquify-exp new_env) e) ((uniquify-exp new_env) body))))]
       [(Prim op es)
        (Prim op (for/list ([e es]) ((uniquify-exp env) e)))])))
 
