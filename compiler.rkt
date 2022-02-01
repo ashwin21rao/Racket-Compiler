@@ -7,6 +7,7 @@
 (require "interp-Lvar.rkt")
 (require "utilities.rkt")
 (provide (all-defined-out))
+(require racket/trace)
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Lint examples
@@ -80,26 +81,36 @@
 
 ;; remove-complex-opera* : R1 -> R1
 
-(define (rco-atom expr)
-  (match expr
-    [(Var x) (list (list (Var x) '()))]
-    [(Int x) (list (list (Int x) '()))]
-    [(Let x e body) (Let x (rco-exp e)
-                      (rco-exp body))]
-    [(Prim op (list exp1 exp2)) (let* ([vs1 (rco-atom exp1)]
-                                [vs2 (rco-atom exp2)]
-                                [atom1 (car (last vs1))]
-                                [atom2 (car (last vs2))]
-                                [new_var (Var (gensym 'temp))]
-                                [new_prim (Prim op (list atom1 atom2))]
-                                [new_ele (list new_var new_prim)])
-                           (append vs1 vs2 (list new_ele)))]
-    [(Prim op (list exp1)) (let* ([vs1 (rco-atom exp1)]
-                           [atom1 (car (last vs1))]
-                           [new_var (gensym 'temp)]
-                           [new_prim (Prim op (list atom1))]
-                           [new_ele (list new_var new_prim)])
-                      (append vs1 (list new_ele)))]))
+;; return atom, list of variables
+(trace-define (rco-atom expr)
+              (match expr
+                [(Var x) (cons (Var x) '())]
+                [(Int x) (cons (Int x) '())]
+                [(Let x e body)
+                 (let* ([new_var (Var (gensym 'temp))]
+                        [list_1 (list x (rco-exp e))]
+                        [list_2 (list new_var (rco-exp body))]
+                        [list_3 (append (list list_1) (list list_2))])
+                    (cons new_var list_3))]
+                [(Prim op (list exp1 exp2)) (let* ([pair_data_1 (rco-atom exp1)]
+                                                   [pair_data_2 (rco-atom exp2)]
+                                                   [atom1 (car pair_data_1)]
+                                                   [atom2 (car pair_data_2)]
+                                                   [vs1 (cdr pair_data_1)]
+                                                   [vs2 (cdr pair_data_2)]
+                                                   [new_var (Var (gensym 'temp))]
+                                                   [new_prim (Prim op (list atom1 atom2))]
+                                                   [new_ele (list new_var new_prim)]
+                                                   [new_vs (append vs1 vs2 (list new_ele))])
+                                              (cons new_var new_vs))]
+                [(Prim op (list exp1)) (let* ([pair_data_1 (rco-atom exp1)]
+                                              [atom1 (car pair_data_1)]
+                                              [vs1 (cdr pair_data_1)]
+                                              [new_var (Var (gensym 'temp))]
+                                              [new_prim (Prim op (list atom1))]
+                                              [new_ele (list new_var new_prim)]
+                                              [new_vs (append vs1 (list new_ele))])
+                                         (cons new_var new_vs))]))
 
 ;; (+ (+ 42 10) (- 10))
 ;; ((tmp1, (+ 42 10), (tmp2, (- 10)))) + tmp1 tmp2
@@ -109,20 +120,18 @@
 #|     [(list (list a b) ...) (Let a b (gen-lets (rest lst)))] |#
 #|   )) |#
 ;; ((temp, (+ 20 10)))
-(require racket/trace)	
 (trace-define (gen-lets lst)
-  (cond 
-    [(= 1 (length lst)) (cadar lst)]
-    [else (Let (caar lst) (cadar lst) (gen-lets (rest lst)))]
-    ))
+              (cond
+                [(= 1 (length lst)) (cadar lst)]
+                [else (Let (caar lst) (cadar lst) (gen-lets (rest lst)))]))
 
-(define (rco-exp e)
-  (match e
-    [(Var x) (Var x)]
-    [(Int x) (Int x)]
-    [(Prim 'read '()) (Prim 'read '())]
-    [(Let x e body) (Let x (rco-exp e) (rco-exp body))]
-    [(Prim op es) (gen-lets (rco-atom (Prim op es)))]))
+(trace-define (rco-exp e)
+              (match e
+                [(Var x) (Var x)]
+                [(Int x) (Int x)]
+                [(Prim 'read '()) (Prim 'read '())]
+                [(Let x e body) (Let x (rco-exp e) (rco-exp body))]
+                [(Prim op es) (gen-lets (cdr (rco-atom (Prim op es))))]))
 
 (define (remove-complex-opera* p)
   (match p
