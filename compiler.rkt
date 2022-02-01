@@ -1,5 +1,6 @@
 #lang racket
 (require racket/set racket/stream)
+(require racket/dict)
 (require racket/fixnum)
 (require "interp-Lint.rkt")
 (require "interp-Lvar.rkt")
@@ -55,11 +56,11 @@
   (lambda (e)
     (match e
       [(Var x)
-       (Var (cdr (assoc x (reverse env))))]
+       (Var (dict-ref env x))]
       [(Int n) (Int n)]
       [(Let x e body) (
         (let* ([new_x (gensym x)]
-               [new_env (append env (list (list x new_x)))]
+               [new_env (dict-set env x new_x)]
                ) 
           (Let new_x ((uniquify-exp new_env) e) ((uniquify-exp new_env) body))))]
       [(Prim op es)
