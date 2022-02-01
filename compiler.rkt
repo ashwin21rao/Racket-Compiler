@@ -82,7 +82,7 @@
 ;; remove-complex-opera* : R1 -> R1
 
 ;; return atom, list of variables
-(trace-define (rco-atom expr)
+(define (rco-atom expr)
               (match expr
                 [(Var x) (cons (Var x) '())]
                 [(Int x) (cons (Int x) '())]
@@ -123,12 +123,12 @@
 #|     [(list (list a b) ...) (Let a b (gen-lets (rest lst)))] |#
 #|   )) |#
 ;; ((temp, (+ 20 10)))
-(trace-define (gen-lets lst)
+(define (gen-lets lst)
               (cond
                 [(= 1 (length lst)) (cadar lst)]
                 [else (Let (caar lst) (cadar lst) (gen-lets (rest lst)))]))
 
-(trace-define (rco-exp e)
+(define (rco-exp e)
               (match e
                 [(Var x) (Var x)]
                 [(Int x) (Int x)]
