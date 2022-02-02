@@ -3,8 +3,9 @@
          racket/stream)
 (require racket/dict)
 (require racket/fixnum)
-(require "interp-Lint.rkt")
+;;(require "interp-Lint.rkt")
 (require "interp-Lvar.rkt")
+(require "interp-Cvar.rkt")
 (require "utilities.rkt")
 (provide (all-defined-out))
 (require racket/trace)
@@ -83,37 +84,36 @@
 
 ;; return atom, list of variables
 (define (rco-atom expr)
-              (match expr
-                [(Var x) (cons (Var x) '())]
-                [(Int x) (cons (Int x) '())]
-                [(Let x e body)
-                 (let* ([new_sym (gensym 'temp)]
-                        [new_var (Var new_sym)]
-                        [list_1 (list x (rco-exp e))]
-                        [list_2 (list new_sym (rco-exp body))]
-                        [list_3 (append (list list_1) (list list_2))])
-                    (cons new_var list_3))]
-                [(Prim op (list exp1 exp2)) (let* ([pair_data_1 (rco-atom exp1)]
-                                                   [pair_data_2 (rco-atom exp2)]
-                                                   [atom1 (car pair_data_1)]
-                                                   [atom2 (car pair_data_2)]
-                                                   [vs1 (cdr pair_data_1)]
-                                                   [vs2 (cdr pair_data_2)]
-                                                   [new_sym (gensym 'temp)]
-                                                   [new_var (Var new_sym)]
-                                                   [new_prim (Prim op (list atom1 atom2))]
-                                                   [new_ele (list new_sym new_prim)]
-                                                   [new_vs (append vs1 vs2 (list new_ele))])
-                                              (cons new_var new_vs))]
-                [(Prim op (list exp1)) (let* ([pair_data_1 (rco-atom exp1)]
-                                              [atom1 (car pair_data_1)]
-                                              [vs1 (cdr pair_data_1)]
-                                              [new_sym (gensym 'temp)]
-                                              [new_var (Var new_sym)]
-                                              [new_prim (Prim op (list atom1))]
-                                              [new_ele (list new_sym new_prim)]
-                                              [new_vs (append vs1 (list new_ele))])
-                                         (cons new_var new_vs))]))
+  (match expr
+    [(Var x) (cons (Var x) '())]
+    [(Int x) (cons (Int x) '())]
+    [(Let x e body) (let* ([new_sym (gensym 'temp)]
+                           [new_var (Var new_sym)]
+                           [list_1 (list x (rco-exp e))]
+                           [list_2 (list new_sym (rco-exp body))]
+                           [list_3 (append (list list_1) (list list_2))])
+                      (cons new_var list_3))]
+    [(Prim op (list exp1 exp2)) (let* ([pair_data_1 (rco-atom exp1)]
+                                       [pair_data_2 (rco-atom exp2)]
+                                       [atom1 (car pair_data_1)]
+                                       [atom2 (car pair_data_2)]
+                                       [vs1 (cdr pair_data_1)]
+                                       [vs2 (cdr pair_data_2)]
+                                       [new_sym (gensym 'temp)]
+                                       [new_var (Var new_sym)]
+                                       [new_prim (Prim op (list atom1 atom2))]
+                                       [new_ele (list new_sym new_prim)]
+                                       [new_vs (append vs1 vs2 (list new_ele))])
+                                  (cons new_var new_vs))]
+    [(Prim op (list exp1)) (let* ([pair_data_1 (rco-atom exp1)]
+                                  [atom1 (car pair_data_1)]
+                                  [vs1 (cdr pair_data_1)]
+                                  [new_sym (gensym 'temp)]
+                                  [new_var (Var new_sym)]
+                                  [new_prim (Prim op (list atom1))]
+                                  [new_ele (list new_sym new_prim)]
+                                  [new_vs (append vs1 (list new_ele))])
+                             (cons new_var new_vs))]))
 
 ;; (+ (+ 42 10) (- 10))
 ;; ((tmp1, (+ 42 10), (tmp2, (- 10)))) + tmp1 tmp2
@@ -124,25 +124,48 @@
 #|   )) |#
 ;; ((temp, (+ 20 10)))
 (define (gen-lets lst)
-              (cond
-                [(= 1 (length lst)) (cadar lst)]
-                [else (Let (caar lst) (cadar lst) (gen-lets (rest lst)))]))
+  (cond
+    [(= 1 (length lst)) (cadar lst)]
+    [else (Let (caar lst) (cadar lst) (gen-lets (rest lst)))]))
 
 (define (rco-exp e)
-              (match e
-                [(Var x) (Var x)]
-                [(Int x) (Int x)]
-                [(Prim 'read '()) (Prim 'read '())]
-                [(Let x e body) (Let x (rco-exp e) (rco-exp body))]
-                [(Prim op es) (gen-lets (cdr (rco-atom (Prim op es))))]))
+  (match e
+    [(Var x) (Var x)]
+    [(Int x) (Int x)]
+    [(Prim 'read '()) (Prim 'read '())]
+    [(Let x e body) (Let x (rco-exp e) (rco-exp body))]
+    [(Prim op es) (gen-lets (cdr (rco-atom (Prim op es))))]))
 
 (define (remove-complex-opera* p)
   (match p
     [(Program info e) (Program info (rco-exp e))]))
 
 ;; explicate-control : R1 -> C0
+;; explicate_tail : Lvar -> C0 tail
+(define (explicate_tail e)
+  (match e
+    [(Var x) (Return (Var x))]
+    [(Int n) (Return (Int n))]
+    [(Let x rhs body) (let* ([tail (explicate_tail body)]
+                             [nt (explicate_assign rhs x tail)]
+                             ) nt)]
+    [(Prim op es) (Return (Prim op es))]
+    [else (error "explicate_tail unhandled case" e)]))
+
+;; explicate_assign : Lvar, Var x, C0 tail -> C0 tail
+(define (explicate_assign e x cont)
+  (match e
+    [(Var y) (Seq (Assign (Var x) (Var y)) cont)]
+    [(Int n) (Seq (Assign (Var x) (Int n)) cont)]
+    [(Let y rhs body) (let* ([tail (explicate_assign body x cont)]
+                             [nt (explicate_assign rhs y tail)]
+                             ) nt)]
+    [(Prim op es) (Seq (Assign (Var x) (Prim op es)) cont)]
+    [else (error "explicate_assign unhandled case" e)]))
+
 (define (explicate-control p)
-  (error "TODO: code goes here (explicate-control)"))
+  (match p
+    [(Program info body) (CProgram info (list (cons 'start (explicate_tail body))))]))
 
 ;; select-instructions : C0 -> pseudo-x86
 (define (select-instructions p)
@@ -167,7 +190,7 @@
   `(("uniquify" ,uniquify ,interp-Lvar)
     ;; Uncomment the following passes as you finish them.
     ("remove complex opera*" ,remove-complex-opera* ,interp-Lvar)
-    ;; ("explicate control" ,explicate-control ,interp-Cvar)
+    ("explicate control" ,explicate-control ,interp-Cvar)
     ;; ("instruction selection" ,select-instructions ,interp-x86-0)
     ;; ("assign homes" ,assign-homes ,interp-x86-0)
     ;; ("patch instructions" ,patch-instructions ,interp-x86-0)
