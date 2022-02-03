@@ -6,6 +6,7 @@
 ;;(require "interp-Lint.rkt")
 (require "interp-Lvar.rkt")
 (require "interp-Cvar.rkt")
+(require "interp.rkt")
 (require "utilities.rkt")
 (provide (all-defined-out))
 (require racket/trace)
@@ -146,9 +147,7 @@
   (match e
     [(Var x) (Return (Var x))]
     [(Int n) (Return (Int n))]
-    [(Let x rhs body) (let* ([tail (explicate_tail body)]
-                             [nt (explicate_assign rhs x tail)]
-                             ) nt)]
+    [(Let x rhs body) (let* ([tail (explicate_tail body)] [nt (explicate_assign rhs x tail)]) nt)]
     [(Prim op es) (Return (Prim op es))]
     [else (error "explicate_tail unhandled case" e)]))
 
@@ -157,9 +156,8 @@
   (match e
     [(Var y) (Seq (Assign (Var x) (Var y)) cont)]
     [(Int n) (Seq (Assign (Var x) (Int n)) cont)]
-    [(Let y rhs body) (let* ([tail (explicate_assign body x cont)]
-                             [nt (explicate_assign rhs y tail)]
-                             ) nt)]
+    [(Let y rhs body)
+     (let* ([tail (explicate_assign body x cont)] [nt (explicate_assign rhs y tail)]) nt)]
     [(Prim op es) (Seq (Assign (Var x) (Prim op es)) cont)]
     [else (error "explicate_assign unhandled case" e)]))
 
@@ -168,8 +166,29 @@
     [(Program info body) (CProgram info (list (cons 'start (explicate_tail body))))]))
 
 ;; select-instructions : C0 -> pseudo-x86
+;; TODO implement read too
+(define (convert-to-x86 p)
+  (match p
+    [(Var x) (Var x)]
+    [(Int x) (Imm x)]
+    [(Seq x y) (append (convert-to-x86 x) (convert-to-x86 y))]
+    [(Assign x (Prim '+ (list a1 a2))) (let* ([instr1 (Instr 'movq (list (convert-to-x86 a1) x))]
+                                              [instr2 (Instr 'addq (list (convert-to-x86 a2) x))])
+                                         (list instr1 instr2))]
+    [(Assign x (Prim '- (list a1 a2))) (let* ([instr1 (Instr 'movq (list (convert-to-x86 a1) x))]
+                                              [instr2 (Instr 'subq (list (convert-to-x86 a2) x))])
+                                         (list instr1 instr2))]
+    [(Assign x (Prim '- (list a1))) (let* ([instr1 (Instr 'movq (list (convert-to-x86 a1) x))]
+                                           [instr2 (Instr 'negq (list x))])
+                                      (list instr1 instr2))]
+    [(Assign x y) (let* ([instr1 (Instr 'movq (list (convert-to-x86 y) x))]) (list instr1))]
+    [(Return e) (let * ([instrs (convert-to-x86 (Assign (Reg 'rax) e))] [instr2 (Jmp 'conclusion)])
+                  (append instrs (list instr2)))]))
+
 (define (select-instructions p)
-  (error "TODO: code goes here (select-instructions)"))
+  (match p
+    [(CProgram info blocks)
+     (X86Program info (list (cons 'start (Block '() (convert-to-x86 (dict-ref blocks 'start))))))]))
 
 ;; assign-homes : pseudo-x86 -> pseudo-x86
 (define (assign-homes p)
@@ -191,7 +210,7 @@
     ;; Uncomment the following passes as you finish them.
     ("remove complex opera*" ,remove-complex-opera* ,interp-Lvar)
     ("explicate control" ,explicate-control ,interp-Cvar)
-    ;; ("instruction selection" ,select-instructions ,interp-x86-0)
+    ("instruction selection" ,select-instructions ,interp-x86-0)
     ;; ("assign homes" ,assign-homes ,interp-x86-0)
     ;; ("patch instructions" ,patch-instructions ,interp-x86-0)
     ;; ("prelude-and-conclusion" ,prelude-and-conclusion ,interp-x86-0)
