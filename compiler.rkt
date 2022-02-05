@@ -10,6 +10,9 @@
 (require "utilities.rkt")
 (provide (all-defined-out))
 (require racket/trace)
+(require "type-check-Lvar.rkt")
+(require "type-check-Cvar.rkt")
+
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Lint examples
@@ -70,11 +73,13 @@
     (match e
       [(Var x) (Var (dict-ref env x))]
       [(Int n) (Int n)]
-      [(Let x e body) (let* ([new_x (gensym x)] [new_env (dict-set env x new_x)])
-                        (Let new_x ((uniquify-exp env) e) ((uniquify-exp new_env) body)))]
-      [(Prim op es) (Prim op
-                          (for/list ([e es])
-                            ((uniquify-exp env) e)))])))
+      [(Let x e body)
+       (let* ([new_x (gensym x)] [new_env (dict-set env x new_x)])
+         (Let new_x ((uniquify-exp env) e) ((uniquify-exp new_env) body)))]
+      [(Prim op es)
+       (Prim op
+             (for/list ([e es])
+               ((uniquify-exp env) e)))])))
 
 ;; uniquify : R1 -> R1
 (define (uniquify p)
@@ -88,33 +93,36 @@
   (match expr
     [(Var x) (cons (Var x) '())]
     [(Int x) (cons (Int x) '())]
-    [(Let x e body) (let* ([new_sym (gensym 'temp)]
-                           [new_var (Var new_sym)]
-                           [list_1 (list x (rco-exp e))]
-                           [list_2 (list new_sym (rco-exp body))]
-                           [list_3 (append (list list_1) (list list_2))])
-                      (cons new_var list_3))]
-    [(Prim op (list exp1 exp2)) (let* ([pair_data_1 (rco-atom exp1)]
-                                       [pair_data_2 (rco-atom exp2)]
-                                       [atom1 (car pair_data_1)]
-                                       [atom2 (car pair_data_2)]
-                                       [vs1 (cdr pair_data_1)]
-                                       [vs2 (cdr pair_data_2)]
-                                       [new_sym (gensym 'temp)]
-                                       [new_var (Var new_sym)]
-                                       [new_prim (Prim op (list atom1 atom2))]
-                                       [new_ele (list new_sym new_prim)]
-                                       [new_vs (append vs1 vs2 (list new_ele))])
-                                  (cons new_var new_vs))]
-    [(Prim op (list exp1)) (let* ([pair_data_1 (rco-atom exp1)]
-                                  [atom1 (car pair_data_1)]
-                                  [vs1 (cdr pair_data_1)]
-                                  [new_sym (gensym 'temp)]
-                                  [new_var (Var new_sym)]
-                                  [new_prim (Prim op (list atom1))]
-                                  [new_ele (list new_sym new_prim)]
-                                  [new_vs (append vs1 (list new_ele))])
-                             (cons new_var new_vs))]))
+    [(Let x e body)
+     (let* ([new_sym (gensym 'temp)]
+            [new_var (Var new_sym)]
+            [list_1 (list x (rco-exp e))]
+            [list_2 (list new_sym (rco-exp body))]
+            [list_3 (append (list list_1) (list list_2))])
+       (cons new_var list_3))]
+    [(Prim op (list exp1 exp2))
+     (let* ([pair_data_1 (rco-atom exp1)]
+            [pair_data_2 (rco-atom exp2)]
+            [atom1 (car pair_data_1)]
+            [atom2 (car pair_data_2)]
+            [vs1 (cdr pair_data_1)]
+            [vs2 (cdr pair_data_2)]
+            [new_sym (gensym 'temp)]
+            [new_var (Var new_sym)]
+            [new_prim (Prim op (list atom1 atom2))]
+            [new_ele (list new_sym new_prim)]
+            [new_vs (append vs1 vs2 (list new_ele))])
+       (cons new_var new_vs))]
+    [(Prim op (list exp1))
+     (let* ([pair_data_1 (rco-atom exp1)]
+            [atom1 (car pair_data_1)]
+            [vs1 (cdr pair_data_1)]
+            [new_sym (gensym 'temp)]
+            [new_var (Var new_sym)]
+            [new_prim (Prim op (list atom1))]
+            [new_ele (list new_sym new_prim)]
+            [new_vs (append vs1 (list new_ele))])
+       (cons new_var new_vs))]))
 
 ;; (+ (+ 42 10) (- 10))
 ;; ((tmp1, (+ 42 10), (tmp2, (- 10)))) + tmp1 tmp2
@@ -172,27 +180,63 @@
     [(Var x) (Var x)]
     [(Int x) (Imm x)]
     [(Seq x y) (append (convert-to-x86 x) (convert-to-x86 y))]
-    [(Assign x (Prim '+ (list a1 a2))) (let* ([instr1 (Instr 'movq (list (convert-to-x86 a1) x))]
-                                              [instr2 (Instr 'addq (list (convert-to-x86 a2) x))])
-                                         (list instr1 instr2))]
-    [(Assign x (Prim '- (list a1 a2))) (let* ([instr1 (Instr 'movq (list (convert-to-x86 a1) x))]
-                                              [instr2 (Instr 'subq (list (convert-to-x86 a2) x))])
-                                         (list instr1 instr2))]
-    [(Assign x (Prim '- (list a1))) (let* ([instr1 (Instr 'movq (list (convert-to-x86 a1) x))]
-                                           [instr2 (Instr 'negq (list x))])
-                                      (list instr1 instr2))]
+    [(Assign x (Prim '+ (list a1 a2)))
+     (let* ([instr1 (Instr 'movq (list (convert-to-x86 a1) x))]
+            [instr2 (Instr 'addq (list (convert-to-x86 a2) x))])
+       (list instr1 instr2))]
+    [(Assign x (Prim '- (list a1 a2)))
+     (let* ([instr1 (Instr 'movq (list (convert-to-x86 a1) x))]
+            [instr2 (Instr 'subq (list (convert-to-x86 a2) x))])
+       (list instr1 instr2))]
+    [(Assign x (Prim '- (list a1)))
+     (let* ([instr1 (Instr 'movq (list (convert-to-x86 a1) x))] [instr2 (Instr 'negq (list x))])
+       (list instr1 instr2))]
     [(Assign x y) (let* ([instr1 (Instr 'movq (list (convert-to-x86 y) x))]) (list instr1))]
-    [(Return e) (let * ([instrs (convert-to-x86 (Assign (Reg 'rax) e))] [instr2 (Jmp 'conclusion)])
-                  (append instrs (list instr2)))]))
+    [(Return e)
+     (let * ([instrs (convert-to-x86 (Assign (Reg 'rax) e))] [instr2 (Jmp 'conclusion)])
+       (append instrs (list instr2)))]))
 
 (define (select-instructions p)
   (match p
     [(CProgram info blocks)
      (X86Program info (list (cons 'start (Block '() (convert-to-x86 (dict-ref blocks 'start))))))]))
 
+(define (set_variable var_list position)
+  (cond
+    [(empty? var_list) (list)]
+    [else (cons (list (car var_list) position) (set_variable (cdr var_list) (- position 8)))]))
+
+(define (replace_inst_list inst_list var_list)
+  (for/list ([inst inst_list])
+    (match inst
+      [(Instr op args)
+       (Instr op
+              (for/list ([arg args])
+                (match arg
+                  [(Var v) (Deref 'rbp (first (dict-ref var_list v)))]
+                  [else arg]
+                  )))]
+        [else inst]
+      )))
+                        
+
+(define (replace_vars cur_block var_list)
+  (match cur_block
+    [(Block info inst_list)
+    (Block
+     info
+     (replace_inst_list inst_list var_list))]))
+
 ;; assign-homes : pseudo-x86 -> pseudo-x86
 (define (assign-homes p)
-  (error "TODO: code goes here (assign-homes)"))
+  (match p
+    [(X86Program info blocks)
+     (X86Program
+      info
+      (let* ([var_list (set_variable (dict-keys (dict-ref info 'locals-types)) -8)]
+             [new_p (replace_vars (dict-ref blocks 'start) var_list)])
+        (dict-set blocks 'start new_p)))]))
+; (error "TODO: code goes here (assign-homes)"))
 
 ;; patch-instructions : psuedo-x86 -> x86
 (define (patch-instructions p)
@@ -208,10 +252,10 @@
 (define compiler-passes
   `(("uniquify" ,uniquify ,interp-Lvar)
     ;; Uncomment the following passes as you finish them.
-    ("remove complex opera*" ,remove-complex-opera* ,interp-Lvar)
-    ("explicate control" ,explicate-control ,interp-Cvar)
+    ("remove complex opera*" ,remove-complex-opera* ,interp-Lvar, type-check-Lvar)
+    ("explicate control" ,explicate-control ,interp-Cvar, type-check-Cvar)
     ("instruction selection" ,select-instructions ,interp-x86-0)
-    ;; ("assign homes" ,assign-homes ,interp-x86-0)
+    ("assign homes" ,assign-homes ,interp-x86-0)
     ;; ("patch instructions" ,patch-instructions ,interp-x86-0)
     ;; ("prelude-and-conclusion" ,prelude-and-conclusion ,interp-x86-0)
     ))
