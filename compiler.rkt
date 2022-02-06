@@ -96,6 +96,10 @@
                            [list_2 (list new_sym (rco-exp body))]
                            [list_3 (append (list list_1) (list list_2))])
                       (cons new_var list_3))]
+    [(Prim 'read '()) (let* ([new_sym (gensym 'temp)]
+                             [new_var (Var new_sym)]
+                             [new_ele (list new_sym (Prim 'read '()))]
+                             ) (cons new_var (list new_ele)))]
     [(Prim op (list exp1 exp2)) (let* ([pair_data_1 (rco-atom exp1)]
                                        [pair_data_2 (rco-atom exp2)]
                                        [atom1 (car pair_data_1)]
@@ -184,6 +188,9 @@
     [(Assign x (Prim '- (list a1))) (let* ([instr1 (Instr 'movq (list (convert-to-x86 a1) x))]
                                            [instr2 (Instr 'negq (list x))])
                                       (list instr1 instr2))]
+    [(Assign x (Prim 'read '())) (let* ([instr1 (Callq 'read_int 0)]
+                                        [instr2 (Instr 'movq (list (Reg 'rax) x))])
+                                    (list instr1 instr2))]
     [(Assign x y) (let* ([instr1 (Instr 'movq (list (convert-to-x86 y) x))]) (list instr1))]
     [(Return e) (let * ([instrs (convert-to-x86 (Assign (Reg 'rax) e))] [instr2 (Jmp 'conclusion)])
                   (append instrs (list instr2)))]))
@@ -224,7 +231,7 @@
 
 ;; patch-instructions : psuedo-x86 -> x86
 
-(trace-define (fix-instructions inst_list)
+(define (fix-instructions inst_list)
               (for/list ([inst inst_list])
                 (match inst
                   [(Instr op (list (Deref reg1 off1) (Deref reg2 off2)))
@@ -233,7 +240,7 @@
                      (list instr1 instr2))]
                   [else inst])))
 
-(trace-define (patch-block pr)
+(define (patch-block pr)
               (cons (car pr)
                     (match (cdr pr)
                       [(Block info instrs) (Block info (flatten (fix-instructions instrs)))]
@@ -241,7 +248,7 @@
                        error
                        "Not a valid block"])))
 
-(trace-define (patch-instructions p)
+(define (patch-instructions p)
               (match p
                 [(X86Program info blocks) (X86Program info (map patch-block blocks))]))
 
@@ -250,7 +257,8 @@
   (match p
     [(X86Program info blocks)
      (X86Program info
-                 (let* ([stacksize (* 8 (length (dict-keys (dict-ref info 'locals-types))))]
+                 (let* ([stacksize (* 8 (+ 2 (length (dict-keys (dict-ref info 'locals-types)))))]
+                        [stacksize (+ stacksize (modulo stacksize 16))]
                         [instr1 (Instr 'pushq (list (Reg 'rbp)))]
                         [instr2 (Instr 'movq (list (Reg 'rsp) (Reg 'rbp)))]
                         [instr3 (Instr 'subq (list (Imm stacksize) (Reg 'rsp)))]
@@ -259,8 +267,9 @@
                         [instr6 (Instr 'popq (list (Reg 'rbp)))]
                         [instr7 (Retq)]
                         [main_block (Block empty (list instr1 instr2 instr3 instr4))] 
-                        [conclusion_block (Block empty (list instr5 instr6 instr7))])
-                   (dict-set* blocks 'main main_block 'conclusion conclusion_block)))]))
+                        [conclusion_block (Block empty (list instr5 instr6 instr7))]
+                        [blocks (dict-set* blocks 'main main_block 'conclusion conclusion_block)])
+                   blocks))]))
 
 ;; Define the compiler passes to be used by interp-tests and the grader
 ;; Note that your compiler file (the file that defines the passes)
