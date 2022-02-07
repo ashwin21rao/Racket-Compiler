@@ -18,3 +18,6 @@ compiled/
 
 # Dependency tracking files
 *.dep
+
+# Useless files
+out.txt
