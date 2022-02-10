@@ -31,25 +31,60 @@
   (match e
     [(Program info e) (Program info (flip-exp e))]))
 
-;; Next we have the partial evaluation pass described in the book.
+;; Partial evaluation for Lvar language
 (define (pe-neg r)
   (match r
     [(Int n) (Int (fx- 0 n))]
     [else (Prim '- (list r))]))
 
+(trace-define (make-inert ex)
+    (match ex
+        [(Int n) (cons n '())]
+        [(Let x e body) (cons 0 (Let x (pe-exp e) (pe-exp body)))]
+        [(Prim '+ (list ex1 ex2))(let* ([pair_data_1 (make-inert ex1)]
+                                        [pair_data_2 (make-inert ex2)]
+                                        [ex3 (cdr pair_data_1)]
+                                        [ex4 (cdr pair_data_2)]
+                                        [n_f (fx+ (car pair_data_1) (car pair_data_2))] 
+                                        [exp_f (cond 
+                                                [(and (empty? ex3) (empty? ex4)) empty]
+                                                [(empty? ex4) ex3]
+                                                [(empty? ex3) ex4]
+                                                [else (Prim '+ (list ex3 ex4))]
+                                                 )]
+                                        ) (cons n_f exp_f))]
+        [else (cons 0 ex)]
+      )
+  )
+
+
 (define (pe-add r1 r2)
   (match* (r1 r2)
     [((Int n1) (Int n2)) (Int (fx+ n1 n2))]
-    [(_ _) (Prim '+ (list r1 r2))]))
+    [(exp1 exp2) (let* ([data (make-inert (Prim '+ (list exp1 exp2)))]
+                         [exp_f (cdr data)]
+                         [ret (cond 
+                            [(empty? exp_f) (Int (car data))]
+                            [else (Prim '+ (list (Int (car data)) (cdr data)))]
+                            )]
+                         )ret)]))
 
-(define (pe-exp e)
+(define (pe-sub r1 r2)
+  (match* (r1 r2)
+    [((Int n1) (Int n2)) (Int (fx- n1 n2))]
+    [(_ _) (Prim '- (list r1 r2))]))
+
+(trace-define (pe-exp e)
   (match e
+    [(Var x) (Var x)]
     [(Int n) (Int n)]
     [(Prim 'read '()) (Prim 'read '())]
     [(Prim '- (list e1)) (pe-neg (pe-exp e1))]
-    [(Prim '+ (list e1 e2)) (pe-add (pe-exp e1) (pe-exp e2))]))
+    [(Prim '+ (list e1 e2)) (pe-add (pe-exp e1) (pe-exp e2))]
+    [(Prim '- (list e1 e2)) (pe-sub (pe-exp e1) (pe-exp e2))]
+    [(Let x e body) (Let x (pe-exp e) (pe-exp body))]))
 
-(define (pe-Lint p)
+(define (pe-Lvar p)
   (match p
     [(Program info e) (Program info (pe-exp e))]))
 
@@ -73,7 +108,6 @@
   (match p
     [(Program info e) (Program info ((uniquify-exp '()) e))]))
 
-
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 ;; return atom, list of variables
@@ -89,8 +123,8 @@
                       (cons new_var list_3))]
     [(Prim 'read '()) (let* ([new_sym (gensym 'temp)]
                              [new_var (Var new_sym)]
-                             [new_ele (list new_sym (Prim 'read '()))]
-                             ) (cons new_var (list new_ele)))]
+                             [new_ele (list new_sym (Prim 'read '()))])
+                        (cons new_var (list new_ele)))]
     [(Prim op (list exp1 exp2)) (let* ([pair_data_1 (rco-atom exp1)]
                                        [pair_data_2 (rco-atom exp2)]
                                        [atom1 (car pair_data_1)]
@@ -111,8 +145,7 @@
                                   [new_prim (Prim op (list atom1))]
                                   [new_ele (list new_sym new_prim)]
                                   [new_vs (append vs1 (list new_ele))])
-                             (cons new_var new_vs))]
-    ))
+                             (cons new_var new_vs))]))
 
 (define (gen-lets lst)
   (cond
@@ -177,16 +210,14 @@
                                       (list instr1 instr2))]
     [(Assign x (Prim 'read '())) (let* ([instr1 (Callq 'read_int 0)]
                                         [instr2 (Instr 'movq (list (Reg 'rax) x))])
-                                    (list instr1 instr2))]
+                                   (list instr1 instr2))]
     [(Assign x y) (let* ([instr1 (Instr 'movq (list (convert-to-x86 y) x))]) (list instr1))]
     [(Return e) (let * ([instrs (convert-to-x86 (Assign (Reg 'rax) e))] [instr2 (Jmp 'conclusion)])
                   (append instrs (list instr2)))]))
 
 (define (select-instructions-block blck)
   (match blck
-    [(cons label cmds) (cons label (Block '() (convert-to-x86 cmds)))]
-    )
-  )
+    [(cons label cmds) (cons label (Block '() (convert-to-x86 cmds)))]))
 (define (select-instructions p)
   (match p
     [(CProgram info blocks) (X86Program info (map select-instructions-block blocks))]))
@@ -210,40 +241,42 @@
 
 (define (assign-homes-blocks cur_block var_stack_mapping)
   (match cur_block
-    [(cons label (Block info instr_list)) (cons label (Block info (assign-home-instr-list instr_list var_stack_mapping)))]))
+    [(cons label (Block info instr_list))
+     (cons label (Block info (assign-home-instr-list instr_list var_stack_mapping)))]))
 
 ;; assign-homes : pseudo-x86 -> pseudo-x86
 (define (assign-homes p)
   (match p
     [(X86Program info blocks)
-     (X86Program info
-                 (let* ([var_stack_mapping (var-offset-mapping (dict-keys (dict-ref info 'locals-types)) -8)]
-                        [new_blocks (map (lambda (x) (assign-homes-blocks x var_stack_mapping)) blocks)])
-                   new_blocks))]))
+     (X86Program
+      info
+      (let* ([var_stack_mapping (var-offset-mapping (dict-keys (dict-ref info 'locals-types)) -8)]
+             [new_blocks (map (lambda (x) (assign-homes-blocks x var_stack_mapping)) blocks)])
+        new_blocks))]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; patch-instructions : psuedo-x86 -> x86
 
 (define (fix-instructions inst_list)
-              (for/list ([inst inst_list])
-                (match inst
-                  [(Instr op (list (Deref reg1 off1) (Deref reg2 off2)))
-                   (let* ([instr1 (Instr 'movq (list (Deref reg1 off1) (Reg 'rax)))]
-                          [instr2 (Instr op (list (Reg 'rax) (Deref reg2 off2)))])
-                     (list instr1 instr2))]
-                  [else inst])))
+  (for/list ([inst inst_list])
+    (match inst
+      [(Instr op (list (Deref reg1 off1) (Deref reg2 off2)))
+       (let* ([instr1 (Instr 'movq (list (Deref reg1 off1) (Reg 'rax)))]
+              [instr2 (Instr op (list (Reg 'rax) (Deref reg2 off2)))])
+         (list instr1 instr2))]
+      [else inst])))
 
 (define (patch-block pr)
-              (cons (car pr)
-                    (match (cdr pr)
-                      [(Block info instrs) (Block info (flatten (fix-instructions instrs)))]
-                      [else
-                       error
-                       "Not a valid block"])))
+  (cons (car pr)
+        (match (cdr pr)
+          [(Block info instrs) (Block info (flatten (fix-instructions instrs)))]
+          [else
+           error
+           "Not a valid block"])))
 
 (define (patch-instructions p)
-              (match p
-                [(X86Program info blocks) (X86Program info (map patch-block blocks))]))
+  (match p
+    [(X86Program info blocks) (X86Program info (map patch-block blocks))]))
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 ;; prelude-and-conclusion : x86 -> x86
@@ -260,7 +293,7 @@
                         [instr5 (Instr 'addq (list (Imm stacksize) (Reg 'rsp)))]
                         [instr6 (Instr 'popq (list (Reg 'rbp)))]
                         [instr7 (Retq)]
-                        [main_block (Block empty (list instr1 instr2 instr3 instr4))] 
+                        [main_block (Block empty (list instr1 instr2 instr3 instr4))]
                         [conclusion_block (Block empty (list instr5 instr6 instr7))]
                         [blocks (dict-set* blocks 'main main_block 'conclusion conclusion_block)])
                    blocks))]))
@@ -270,7 +303,8 @@
 ;; Note that your compiler file (the file that defines the passes)
 ;; must be named "compiler.rkt"
 (define compiler-passes
-  `(("uniquify" ,uniquify ,interp-Lvar)
+  `(("partial evaluation" ,pe-Lvar ,interp-Lvar)
+    ("uniquify" ,uniquify ,interp-Lvar)
     ;; Uncomment the following passes as you finish them.
     ("remove complex opera*" ,remove-complex-opera* ,interp-Lvar ,type-check-Lvar)
     ("explicate control" ,explicate-control ,interp-Cvar ,type-check-Cvar)
