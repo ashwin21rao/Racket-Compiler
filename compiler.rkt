@@ -40,36 +40,31 @@
     [else (Prim '- (list r))]))
 
 (define (make-inert ex)
-    (match ex
-        [(Int n) (cons n '())]
-        ;;[(Let x e body) (cons 0 (Let x (pe-exp e) (pe-exp body)))]
-        [(Prim '+ (list ex1 ex2))(let* ([pair_data_1 (make-inert ex1)]
-                                        [pair_data_2 (make-inert ex2)]
-                                        [ex3 (cdr pair_data_1)]
-                                        [ex4 (cdr pair_data_2)]
-                                        [n_f (fx+ (car pair_data_1) (car pair_data_2))] 
-                                        [exp_f (cond 
-                                                [(and (empty? ex3) (empty? ex4)) empty]
-                                                [(empty? ex4) ex3]
-                                                [(empty? ex3) ex4]
-                                                [else (Prim '+ (list ex3 ex4))]
-                                                 )]
-                                        ) (cons n_f exp_f))]
-        [else (cons 0 ex)]
-      )
-  )
-
+  (match ex
+    [(Int n) (cons n '())]
+    ;;[(Let x e body) (cons 0 (Let x (pe-exp e) (pe-exp body)))]
+    [(Prim '+ (list ex1 ex2)) (let* ([pair_data_1 (make-inert ex1)]
+                                     [pair_data_2 (make-inert ex2)]
+                                     [ex3 (cdr pair_data_1)]
+                                     [ex4 (cdr pair_data_2)]
+                                     [n_f (fx+ (car pair_data_1) (car pair_data_2))]
+                                     [exp_f (cond
+                                              [(and (empty? ex3) (empty? ex4)) empty]
+                                              [(empty? ex4) ex3]
+                                              [(empty? ex3) ex4]
+                                              [else (Prim '+ (list ex3 ex4))])])
+                                (cons n_f exp_f))]
+    [else (cons 0 ex)]))
 
 (define (pe-add r1 r2)
   (match* (r1 r2)
     [((Int n1) (Int n2)) (Int (fx+ n1 n2))]
     [(exp1 exp2) (let* ([data (make-inert (Prim '+ (list exp1 exp2)))]
-                         [exp_f (cdr data)]
-                         [ret (cond 
-                            [(empty? exp_f) (Int (car data))]
-                            [else (Prim '+ (list (Int (car data)) (cdr data)))]
-                            )]
-                         )ret)]))
+                        [exp_f (cdr data)]
+                        [ret (cond
+                               [(empty? exp_f) (Int (car data))]
+                               [else (Prim '+ (list (Int (car data)) (cdr data)))])])
+                   ret)]))
 
 (define (pe-sub r1 r2)
   (match* (r1 r2)
@@ -112,47 +107,28 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-;; return atom, list of variables
+;; return cons(atom, (list (cons variables exp)))
 (define (rco-atom expr)
   (match expr
     [(Var x) (cons (Var x) '())]
     [(Int x) (cons (Int x) '())]
     [(Let x e body) (let* ([new_sym (gensym 'temp)]
                            [new_var (Var new_sym)]
-                           [list_1 (list x (rco-exp e))]
-                           [list_2 (list new_sym (rco-exp body))]
+                           [list_1 (cons x (rco-exp e))]
+                           [list_2 (cons new_sym (rco-exp body))]
                            [list_3 (append (list list_1) (list list_2))])
                       (cons new_var list_3))]
-    [(Prim 'read '()) (let* ([new_sym (gensym 'temp)]
-                             [new_var (Var new_sym)]
-                             [new_ele (list new_sym (Prim 'read '()))])
-                        (cons new_var (list new_ele)))]
-    [(Prim op (list exp1 exp2)) (let* ([pair_data_1 (rco-atom exp1)]
-                                       [pair_data_2 (rco-atom exp2)]
-                                       [atom1 (car pair_data_1)]
-                                       [atom2 (car pair_data_2)]
-                                       [vs1 (cdr pair_data_1)]
-                                       [vs2 (cdr pair_data_2)]
-                                       [new_sym (gensym 'temp)]
-                                       [new_var (Var new_sym)]
-                                       [new_prim (Prim op (list atom1 atom2))]
-                                       [new_ele (list new_sym new_prim)]
-                                       [new_vs (append vs1 vs2 (list new_ele))])
-                                  (cons new_var new_vs))]
-    [(Prim op (list exp1)) (let* ([pair_data_1 (rco-atom exp1)]
-                                  [atom1 (car pair_data_1)]
-                                  [vs1 (cdr pair_data_1)]
-                                  [new_sym (gensym 'temp)]
-                                  [new_var (Var new_sym)]
-                                  [new_prim (Prim op (list atom1))]
-                                  [new_ele (list new_sym new_prim)]
-                                  [new_vs (append vs1 (list new_ele))])
-                             (cons new_var new_vs))]))
+    [(Prim op es) (let* ([new_sym (gensym 'temp)]
+                         [new_var (Var new_sym)]
+                         [pairs (map rco-atom es)]
+                         [atoms (map car pairs)]
+                         [vs (append (foldr append '() (map cdr pairs)) (list (cons new_sym (Prim op atoms))))])
+                    (cons new_var vs))]))
 
-(define (gen-lets lst)
+(trace-define (gen-lets lst)
   (cond
-    [(= 1 (length lst)) (cadar lst)]
-    [else (Let (caar lst) (cadar lst) (gen-lets (rest lst)))]))
+    [(= 1 (length lst)) (cdar lst)]
+    [else (Let (caar lst) (cdar lst) (gen-lets (rest lst)))]))
 
 (define (rco-exp e)
   (match e
@@ -200,28 +176,30 @@
   (match atm
     [(Var x) (Var x)]
     [(Int x) (Imm x)]
-    [else (error "Unhandled atom in select instructions" atm)]
-    )
-  )
+    [else (error "Unhandled atom in select instructions" atm)]))
 
 (define (select-instructions-exp p)
   (match p
     [(Seq x y) (append (select-instructions-exp x) (select-instructions-exp y))]
-    [(Assign x (Prim '+ (list a1 a2))) (let* ([instr1 (Instr 'movq (list (select-instructions-atm a1) x))]
-                                              [instr2 (Instr 'addq (list (select-instructions-atm a2) x))])
-                                         (list instr1 instr2))]
-    [(Assign x (Prim '- (list a1 a2))) (let* ([instr1 (Instr 'movq (list (select-instructions-atm a1) x))]
-                                              [instr2 (Instr 'subq (list (select-instructions-atm a2) x))])
-                                         (list instr1 instr2))]
-    [(Assign x (Prim '- (list a1))) (let* ([instr1 (Instr 'movq (list (select-instructions-atm a1) x))]
-                                           [instr2 (Instr 'negq (list x))])
-                                      (list instr1 instr2))]
+    [(Assign x (Prim '+ (list a1 a2)))
+     (let* ([instr1 (Instr 'movq (list (select-instructions-atm a1) x))]
+            [instr2 (Instr 'addq (list (select-instructions-atm a2) x))])
+       (list instr1 instr2))]
+    [(Assign x (Prim '- (list a1 a2)))
+     (let* ([instr1 (Instr 'movq (list (select-instructions-atm a1) x))]
+            [instr2 (Instr 'subq (list (select-instructions-atm a2) x))])
+       (list instr1 instr2))]
+    [(Assign x (Prim '- (list a1)))
+     (let* ([instr1 (Instr 'movq (list (select-instructions-atm a1) x))]
+            [instr2 (Instr 'negq (list x))])
+       (list instr1 instr2))]
     [(Assign x (Prim 'read '())) (let* ([instr1 (Callq 'read_int 0)]
                                         [instr2 (Instr 'movq (list (Reg 'rax) x))])
                                    (list instr1 instr2))]
     [(Assign x y) (let* ([instr1 (Instr 'movq (list (select-instructions-atm y) x))]) (list instr1))]
-    [(Return e) (let * ([instrs (select-instructions-exp (Assign (Reg 'rax) e))] [instr2 (Jmp 'conclusion)])
-                  (append instrs (list instr2)))]))
+    [(Return e)
+     (let * ([instrs (select-instructions-exp (Assign (Reg 'rax) e))] [instr2 (Jmp 'conclusion)])
+       (append instrs (list instr2)))]))
 
 (define (select-instructions-block blck)
   (match blck
