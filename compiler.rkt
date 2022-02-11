@@ -31,16 +31,18 @@
   (match e
     [(Program info e) (Program info (flip-exp e))]))
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Partial evaluation for Lvar language
+;; Bonus question pass
 (define (pe-neg r)
   (match r
     [(Int n) (Int (fx- 0 n))]
     [else (Prim '- (list r))]))
 
-(trace-define (make-inert ex)
+(define (make-inert ex)
     (match ex
         [(Int n) (cons n '())]
-        [(Let x e body) (cons 0 (Let x (pe-exp e) (pe-exp body)))]
+        ;;[(Let x e body) (cons 0 (Let x (pe-exp e) (pe-exp body)))]
         [(Prim '+ (list ex1 ex2))(let* ([pair_data_1 (make-inert ex1)]
                                         [pair_data_2 (make-inert ex2)]
                                         [ex3 (cdr pair_data_1)]
@@ -74,7 +76,7 @@
     [((Int n1) (Int n2)) (Int (fx- n1 n2))]
     [(_ _) (Prim '- (list r1 r2))]))
 
-(trace-define (pe-exp e)
+(define (pe-exp e)
   (match e
     [(Var x) (Var x)]
     [(Int n) (Int n)]
@@ -89,7 +91,7 @@
     [(Program info e) (Program info (pe-exp e))]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;; HW1 Passes
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; HW1 Passes ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (define (uniquify-exp env)
@@ -167,7 +169,6 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-;; explicate-control : R1 -> C0
 ;; explicate-tail : Lvar -> C0 tail
 (define (explicate-tail e)
   (match e
@@ -187,37 +188,46 @@
     [(Prim op es) (Seq (Assign (Var x) (Prim op es)) cont)]
     [else (error "explicate-assign unhandled case" e)]))
 
+;; explicate-control : R1 -> C0
 (define (explicate-control p)
   (match p
     [(Program info body) (CProgram info (list (cons 'start (explicate-tail body))))]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-;; select-instructions : C0 -> pseudo-x86
-(define (convert-to-x86 p)
-  (match p
+;; select-instructions-atom: C0 atom -> pseudo-x86 atom
+(define (select-instructions-atm atm)
+  (match atm
     [(Var x) (Var x)]
     [(Int x) (Imm x)]
-    [(Seq x y) (append (convert-to-x86 x) (convert-to-x86 y))]
-    [(Assign x (Prim '+ (list a1 a2))) (let* ([instr1 (Instr 'movq (list (convert-to-x86 a1) x))]
-                                              [instr2 (Instr 'addq (list (convert-to-x86 a2) x))])
+    [else (error "Unhandled atom in select instructions" atm)]
+    )
+  )
+
+(define (select-instructions-exp p)
+  (match p
+    [(Seq x y) (append (select-instructions-exp x) (select-instructions-exp y))]
+    [(Assign x (Prim '+ (list a1 a2))) (let* ([instr1 (Instr 'movq (list (select-instructions-atm a1) x))]
+                                              [instr2 (Instr 'addq (list (select-instructions-atm a2) x))])
                                          (list instr1 instr2))]
-    [(Assign x (Prim '- (list a1 a2))) (let* ([instr1 (Instr 'movq (list (convert-to-x86 a1) x))]
-                                              [instr2 (Instr 'subq (list (convert-to-x86 a2) x))])
+    [(Assign x (Prim '- (list a1 a2))) (let* ([instr1 (Instr 'movq (list (select-instructions-atm a1) x))]
+                                              [instr2 (Instr 'subq (list (select-instructions-atm a2) x))])
                                          (list instr1 instr2))]
-    [(Assign x (Prim '- (list a1))) (let* ([instr1 (Instr 'movq (list (convert-to-x86 a1) x))]
+    [(Assign x (Prim '- (list a1))) (let* ([instr1 (Instr 'movq (list (select-instructions-atm a1) x))]
                                            [instr2 (Instr 'negq (list x))])
                                       (list instr1 instr2))]
     [(Assign x (Prim 'read '())) (let* ([instr1 (Callq 'read_int 0)]
                                         [instr2 (Instr 'movq (list (Reg 'rax) x))])
                                    (list instr1 instr2))]
-    [(Assign x y) (let* ([instr1 (Instr 'movq (list (convert-to-x86 y) x))]) (list instr1))]
-    [(Return e) (let * ([instrs (convert-to-x86 (Assign (Reg 'rax) e))] [instr2 (Jmp 'conclusion)])
+    [(Assign x y) (let* ([instr1 (Instr 'movq (list (select-instructions-atm y) x))]) (list instr1))]
+    [(Return e) (let * ([instrs (select-instructions-exp (Assign (Reg 'rax) e))] [instr2 (Jmp 'conclusion)])
                   (append instrs (list instr2)))]))
 
 (define (select-instructions-block blck)
   (match blck
-    [(cons label cmds) (cons label (Block '() (convert-to-x86 cmds)))]))
+    [(cons label cmds) (cons label (Block '() (select-instructions-exp cmds)))]))
+
+;; select-instructions : C0 -> pseudo-x86
 (define (select-instructions p)
   (match p
     [(CProgram info blocks) (X86Program info (map select-instructions-block blocks))]))
@@ -305,7 +315,6 @@
 (define compiler-passes
   `(("partial evaluation" ,pe-Lvar ,interp-Lvar)
     ("uniquify" ,uniquify ,interp-Lvar)
-    ;; Uncomment the following passes as you finish them.
     ("remove complex opera*" ,remove-complex-opera* ,interp-Lvar ,type-check-Lvar)
     ("explicate control" ,explicate-control ,interp-Cvar ,type-check-Cvar)
     ("instruction selection" ,select-instructions ,interp-x86-0)
