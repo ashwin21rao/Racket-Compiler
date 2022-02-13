@@ -122,13 +122,14 @@
                          [new_var (Var new_sym)]
                          [pairs (map rco-atom es)]
                          [atoms (map car pairs)]
-                         [vs (append (foldr append '() (map cdr pairs)) (list (cons new_sym (Prim op atoms))))])
+                         [vs (append (foldr append '() (map cdr pairs))
+                                     (list (cons new_sym (Prim op atoms))))])
                     (cons new_var vs))]))
 
-(trace-define (gen-lets lst)
-  (cond
-    [(= 1 (length lst)) (cdar lst)]
-    [else (Let (caar lst) (cdar lst) (gen-lets (rest lst)))]))
+(define (gen-lets lst)
+              (cond
+                [(= 1 (length lst)) (cdar lst)]
+                [else (Let (caar lst) (cdar lst) (gen-lets (rest lst)))]))
 
 (define (rco-exp e)
   (match e
@@ -286,6 +287,56 @@
                         [blocks (dict-set* blocks 'main main_block 'conclusion conclusion_block)])
                    blocks))]))
 
+(define (instr-location-read instr)
+  (let* ([live_list (match instr
+                     [(Instr 'movq (list arg1 arg2)) (list arg1)]
+                     [(Instr 'addq (list arg1 arg2)) (list arg1 arg2)]
+                     [(Instr 'subq (list arg1 arg2)) (list arg1 arg2)]
+                     [(Instr 'negq (list arg1)) (list arg1)]
+                     [(Callq x y) (take '(rdi rsi rdx rcx r8 r9)
+                                        y)] ;; TODO what happens if more than 6 args
+                     [(Jmp label) empty]
+                     [else (error "Invalid instruction" instr)])]
+         [filter_list (filter (lambda (x) (or (Var? x) (Reg? x))) live_list)])
+    (list->set filter_list)))
+
+(define (instr-location-written instr)
+  (let* ([live_list (match instr
+                      [(Instr 'movq (list arg1 arg2)) (list arg2)]
+                      [(Instr 'addq (list arg1 arg2)) (list arg2)]
+                      [(Instr 'subq (list arg1 arg2)) (list arg2)]
+                      [(Instr 'negq (list arg1)) (list arg1)]
+                      [(Callq x y)
+                       '(rax rcx rdx rsi rdi r8 r9 r10 r11)] ;; make these actual registers
+                      [(Jmp label) empty]
+                      [else (error "Invalid instruction" instr)])]
+         [filter_list (filter (lambda (x) (or (Var? x) (Reg? x))) live_list)])
+    (list->set filter_list)))
+
+(define (uncover-live-instrs instrs prev_liveness)
+  (match instrs
+    [(list) empty]
+    [else
+     (let* ([instr (first instrs)]
+            [prev_liveness (match instr
+                             [(Jmp label) (set (Reg 'rax) (Reg 'rsp))]
+                             [else prev_liveness])]
+            [locations_read (instr-location-read instr)]
+            [locations_written (instr-location-written instr)]
+            [new_liveness (set-union (set-subtract prev_liveness locations_written) locations_read)])
+       (append (uncover-live-instrs (rest instrs) new_liveness) (list new_liveness)))]))
+
+(define (uncover-live-block blck)
+  (match blck
+    [(cons label (Block info instrs))
+     (cons label
+           (Block (dict-set info 'liveness (uncover-live-instrs (reverse instrs) (list (set))))
+                  instrs))]))
+
+(define (uncover_live p)
+  (match p
+    [(X86Program info blocks) (X86Program info (map uncover-live-block blocks))]))
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Define the compiler passes to be used by interp-tests and the grader
 ;; Note that your compiler file (the file that defines the passes)
@@ -296,6 +347,7 @@
     ("remove complex opera*" ,remove-complex-opera* ,interp-Lvar ,type-check-Lvar)
     ("explicate control" ,explicate-control ,interp-Cvar ,type-check-Cvar)
     ("instruction selection" ,select-instructions ,interp-x86-0)
+    ("liveness analysis" ,uncover_live ,interp-x86-0)
     ("assign homes" ,assign-homes ,interp-x86-0)
     ("patch instructions" ,patch-instructions ,interp-x86-0)
     ("prelude-and-conclusion" ,prelude-and-conclusion ,interp-x86-0)))
