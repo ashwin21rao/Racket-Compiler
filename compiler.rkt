@@ -3,6 +3,7 @@
          racket/stream)
 (require racket/dict)
 (require racket/fixnum)
+(require graph)
 ;;(require "interp-Lint.rkt")
 (require "interp-Lvar.rkt")
 (require "interp-Cvar.rkt")
@@ -33,6 +34,7 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Partial evaluation for Lvar language
+;; TODO change partial evaluation in the other branch too
 ;; Bonus question pass
 (define (pe-neg r)
   (match r
@@ -62,6 +64,7 @@
     [(exp1 exp2) (let* ([data (make-inert (Prim '+ (list exp1 exp2)))]
                         [exp_f (cdr data)]
                         [ret (cond
+                               [(= 0 (car data)) exp_f]
                                [(empty? exp_f) (Int (car data))]
                                [else (Prim '+ (list (Int (car data)) (cdr data)))])])
                    ret)]))
@@ -127,9 +130,9 @@
                     (cons new_var vs))]))
 
 (define (gen-lets lst)
-              (cond
-                [(= 1 (length lst)) (cdar lst)]
-                [else (Let (caar lst) (cdar lst) (gen-lets (rest lst)))]))
+  (cond
+    [(= 1 (length lst)) (cdar lst)]
+    [else (Let (caar lst) (cdar lst) (gen-lets (rest lst)))]))
 
 (define (rco-exp e)
   (match e
@@ -287,27 +290,28 @@
                         [blocks (dict-set* blocks 'main main_block 'conclusion conclusion_block)])
                    blocks))]))
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(define (filter-var-reg lst)
+  (list->set (filter (lambda (x) (or (Var? x) (Reg? x))) lst)))
+
 (define (instr-location-read instr)
   (let* ([live_list (match instr
-                     [(Instr 'movq (list arg1 arg2)) (list arg1)]
-                     [(Instr 'addq (list arg1 arg2)) (list arg1 arg2)]
-                     [(Instr 'subq (list arg1 arg2)) (list arg1 arg2)]
-                     [(Instr 'negq (list arg1)) (list arg1)]
-                     [(Callq x y) (take '(rdi rsi rdx rcx r8 r9)
-                                        y)] ;; TODO what happens if more than 6 args
-                     [(Jmp label) empty]
-                     [else (error "Invalid instruction" instr)])]
+                      [(Instr 'movq (list arg1 arg2)) (list arg1)]
+                      [(Instr 'addq (list arg1 arg2)) (list arg1 arg2)]
+                      [(Instr 'subq (list arg1 arg2)) (list arg1 arg2)]
+                      [(Instr 'negq (list arg1)) (list arg1)]
+                      [(Callq x y) (map Reg (take '(rdi rsi rdx rcx r8 r9)
+                                         y))] ;; TODO what happens if more than 6 args
+                      [(Jmp label) empty]
+                      [else (error "Invalid instruction" instr)])]
          [filter_list (filter (lambda (x) (or (Var? x) (Reg? x))) live_list)])
     (list->set filter_list)))
 
 (define (instr-location-written instr)
   (let* ([live_list (match instr
-                      [(Instr 'movq (list arg1 arg2)) (list arg2)]
-                      [(Instr 'addq (list arg1 arg2)) (list arg2)]
-                      [(Instr 'subq (list arg1 arg2)) (list arg2)]
-                      [(Instr 'negq (list arg1)) (list arg1)]
+                      [(Instr op es) (list (last es))]
                       [(Callq x y)
-                       '(rax rcx rdx rsi rdi r8 r9 r10 r11)] ;; make these actual registers
+                       (map Reg '(rax rcx rdx rsi rdi r8 r9 r10 r11))] ;; make these actual registers
                       [(Jmp label) empty]
                       [else (error "Invalid instruction" instr)])]
          [filter_list (filter (lambda (x) (or (Var? x) (Reg? x))) live_list)])
@@ -338,16 +342,47 @@
     [(X86Program info blocks) (X86Program info (map uncover-live-block blocks))]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(define (get-edges instr_k l_after)
+  (let* ([var_written (match instr_k
+            [(Instr 'movq es) (filter-var-reg es)]
+            [else (instr-location-written instr_k)])]
+         [l_left (set-subtract l_after var_written)] ;; remove both d, s from l_after
+         [l_left_list (set->list l_left)]
+         [var_written_list (set->list var_written)]
+         [var_written_list (match instr_k
+                [(Instr 'movq es) (list (last es))] ;; incase of movq only make edges from the dest
+                [else var_written_list])] ;; make edges from all the written variables
+         [edges (cartesian-product var_written_list l_left_list)])
+    edges))
+
+(define (build-interference-block blck)
+  (match blck
+    [(cons label (Block info instrs)) (let* ([liveness_info (dict-ref info 'liveness)]
+                                [liveness (append (cdr liveness_info) (list (set)))]
+                                [edges (map get-edges instrs liveness)]
+                                [graph (undirected-graph (foldr append '() edges))]
+                                [info (dict-set info 'conflict-edges edges)]
+                                [info (dict-set info 'conflicts graph)])
+                           (cons label (Block info instrs)))]))
+
+(define (build-interference p)
+  (match p
+    [(X86Program info blocks) (X86Program info (map build-interference-block blocks))]))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Define the compiler passes to be used by interp-tests and the grader
 ;; Note that your compiler file (the file that defines the passes)
 ;; must be named "compiler.rkt"
 (define compiler-passes
-  `(("partial evaluation" ,pe-Lvar ,interp-Lvar)
+  `(
+   ;; ("partial evaluation" ,pe-Lvar ,interp-Lvar)
     ("uniquify" ,uniquify ,interp-Lvar)
     ("remove complex opera*" ,remove-complex-opera* ,interp-Lvar ,type-check-Lvar)
     ("explicate control" ,explicate-control ,interp-Cvar ,type-check-Cvar)
     ("instruction selection" ,select-instructions ,interp-x86-0)
     ("liveness analysis" ,uncover_live ,interp-x86-0)
+    ("build interference" ,build-interference ,interp-x86-0)
     ("assign homes" ,assign-homes ,interp-x86-0)
     ("patch instructions" ,patch-instructions ,interp-x86-0)
     ("prelude-and-conclusion" ,prelude-and-conclusion ,interp-x86-0)))
