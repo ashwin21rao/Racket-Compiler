@@ -300,8 +300,9 @@
                       [(Instr 'addq (list arg1 arg2)) (list arg1 arg2)]
                       [(Instr 'subq (list arg1 arg2)) (list arg1 arg2)]
                       [(Instr 'negq (list arg1)) (list arg1)]
-                      [(Callq x y) (map Reg (take '(rdi rsi rdx rcx r8 r9)
-                                         y))] ;; TODO what happens if more than 6 args
+                      [(Callq x y) (map Reg
+                                        (take '(rdi rsi rdx rcx r8 r9)
+                                              y))] ;; TODO what happens if more than 6 args
                       [(Jmp label) empty]
                       [else (error "Invalid instruction" instr)])]
          [filter_list (filter (lambda (x) (or (Var? x) (Reg? x))) live_list)])
@@ -345,44 +346,59 @@
 
 (define (get-edges instr_k l_after)
   (let* ([var_written (match instr_k
-            [(Instr 'movq es) (filter-var-reg es)]
-            [else (instr-location-written instr_k)])]
+                        [(Instr 'movq es) (filter-var-reg es)]
+                        [else (instr-location-written instr_k)])]
          [l_left (set-subtract l_after var_written)] ;; remove both d, s from l_after
          [l_left_list (set->list l_left)]
          [var_written_list (set->list var_written)]
-         [var_written_list (match instr_k
-                [(Instr 'movq es) (list (last es))] ;; incase of movq only make edges from the dest
-                [else var_written_list])] ;; make edges from all the written variables
+         [var_written_list
+          (match instr_k
+            [(Instr 'movq es) (list (last es))] ;; incase of movq only make edges from the dest
+            [else var_written_list])] ;; make edges from all the written variables
          [edges (cartesian-product var_written_list l_left_list)])
     edges))
 
-(define (build-interference-block blck)
-  (match blck
-    [(cons label (Block info instrs)) (let* ([liveness_info (dict-ref info 'liveness)]
-                                [liveness (append (cdr liveness_info) (list (set)))]
-                                [edges (map get-edges instrs liveness)]
-                                [graph (undirected-graph (foldr append '() edges))]
-                                [info (dict-set info 'conflict-edges edges)]
-                                [info (dict-set info 'conflicts graph)])
-                           (cons label (Block info instrs)))]))
+(define (flatten-one lst)
+  (foldr append '() lst))
+
+(define (get-liveness-from-block blck)
+  (let* ([info (Block-info (cdr blck))]
+         [liveness (dict-ref info 'liveness)]
+         [liveness (append (cdr liveness) (list (set)))])
+    liveness))
 
 (define (build-interference p)
   (match p
-    [(X86Program info blocks) (X86Program info (map build-interference-block blocks))]))
+    [(X86Program info blocks)
+     (let* ([instrs (flatten-one (map (lambda (blck) (Block-instr* (cdr blck))) blocks))]
+            [liveness (flatten-one (map get-liveness-from-block blocks))]
+            [edges (map get-edges instrs liveness)]
+            [graph (undirected-graph (foldr append '() edges))]
+            [info (dict-set info 'conflict-edges edges)]
+            [info (dict-set info 'conflicts graph)])
+       (X86Program info blocks))]))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(trace-define (check-info info) info)
+
+(define (allocate-registers p)
+  (match p
+    [(X86Program info blocks) (X86Program (check-info info) blocks)]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Define the compiler passes to be used by interp-tests and the grader
 ;; Note that your compiler file (the file that defines the passes)
 ;; must be named "compiler.rkt"
 (define compiler-passes
-  `(
-   ;; ("partial evaluation" ,pe-Lvar ,interp-Lvar)
-    ("uniquify" ,uniquify ,interp-Lvar)
+  ;; ("partial evaluation" ,pe-Lvar ,interp-Lvar)
+  `(("uniquify" ,uniquify ,interp-Lvar)
     ("remove complex opera*" ,remove-complex-opera* ,interp-Lvar ,type-check-Lvar)
     ("explicate control" ,explicate-control ,interp-Cvar ,type-check-Cvar)
     ("instruction selection" ,select-instructions ,interp-x86-0)
     ("liveness analysis" ,uncover_live ,interp-x86-0)
     ("build interference" ,build-interference ,interp-x86-0)
+    ("allocate registers", allocate-registers, interp-x86-0)
     ("assign homes" ,assign-homes ,interp-x86-0)
     ("patch instructions" ,patch-instructions ,interp-x86-0)
     ("prelude-and-conclusion" ,prelude-and-conclusion ,interp-x86-0)))
