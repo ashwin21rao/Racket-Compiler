@@ -9,6 +9,8 @@
 (require "interp-Cvar.rkt")
 (require "interp.rkt")
 (require "utilities.rkt")
+(require "priority_queue.rkt")
+(require "heap.rkt")
 (provide (all-defined-out))
 (require racket/trace)
 (require "type-check-Lvar.rkt")
@@ -380,11 +382,104 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(trace-define (check-info info) info)
+(define (saturation-cmp x y)
+  (match* (x y)
+    [((cons var_x sat_x) (cons var_y sat_y)) (> (set-count sat_x) (set-count sat_y))]
+    [(_ _) (error "Invalid comparison")]))
+
+(define (get-var x)
+  (car (node-key x)))
+(define (get-sat x)
+  (cdr (node-key x)))
+
+(define (find-handle-neigh handle neighbours)
+  (or (member (Reg (get-var handle)) neighbours) (member (Var (get-var handle)) neighbours)))
+
+(define (update-saturation handle color)
+  (let* ([var (get-var handle)]
+         [saturation (get-sat handle)]
+         [new_sat (set-union saturation (set color))])
+    (set-node-key! handle (cons var new_sat))))
+
+(define (update-saturations graph handles var color)
+  (let* ([neighbours (sequence->list (in-neighbors graph var))]
+         [neighbour-handles (filter (lambda (x) (find-handle-neigh x neighbours)) handles)]
+         [_ (map (lambda (x) (update-saturation x color)) neighbour-handles)])
+    color))
+
+(define (get_greedy_color sat_popped num)
+  (if (set-member? sat_popped num) (get_greedy_color sat_popped (+ num 1)) num))
+
+(define (not-while-loop n graph handles w)
+  (cond
+    [(= n 0) '()]
+    [else (let* ([node_popped (pqueue-pop! w)]
+                 [var_popped (car node_popped)]
+                 [sat_popped (cdr node_popped)]
+                 [reqd_color (get_greedy_color sat_popped 0)]
+                 [color_pair (cons (Var var_popped) reqd_color)]
+                 [handles (filter (lambda (x) (not (equal? (car (node-key x)) var_popped)))
+                                  handles)] ;; remove the popped element from handles
+                 [_ (update-saturations graph handles (Var var_popped) reqd_color)]
+                 [lst (append (list color_pair) (not-while-loop (- n 1) graph handles w))])
+            lst)]))
+
+(define (color_graph graph vars)
+  (let* ([var_color (list (cons (Reg 'rax) -1) (cons (Reg 'rsp) -2))]
+         [w (make-pqueue saturation-cmp)]
+         [handles (for/list ([var vars])
+                    (pqueue-push! w (cons var (set))))]
+         [call1 (update-saturations graph handles (Reg 'rax) -1)]
+         [call2 (update-saturations graph handles (Reg 'rsp) -2)]
+         [n (pqueue-count w)]
+         [vars (not-while-loop n graph handles w)]
+         [var_color (append var_color vars)])
+    var_color))
+
+(define (get-color-to-home reg_list current_color max_color offset)
+  (cond
+    [(> current_color max_color) '()]
+    [(empty? reg_list)
+     (let* ([current_map (cons current_color (Deref 'rbp offset))]
+            [current_map
+             (append (list current_map)
+                     (get-color-to-home reg_list (+ 1 current_color) max_color (- offset 8)))])
+       current_map)]
+    [else (let* ([current_map (cons current_color (car reg_list))]
+                 [current_map
+                  (append (list current_map)
+                          (get-color-to-home (rest reg_list) (+ 1 current_color) max_color offset))])
+            current_map)]))
+
+(define (allocate-register-instrs inst_list vtc cth)
+  (for/list ([inst inst_list])
+    (match inst
+      [(Instr op args)
+       (Instr op
+              (for/list ([arg args])
+                (match arg
+                  [(Var v) (let* ([color (dict-ref vtc (Var v))] [home (dict-ref cth color)]) home)]
+                  [else arg])))]
+      [else inst])))
+
+(define (allocate-register-block cur_block vtc cth)
+  (match cur_block
+    [(cons label (Block info instr_list))
+     (cons label (Block info (allocate-register-instrs instr_list vtc cth)))]))
 
 (define (allocate-registers p)
   (match p
-    [(X86Program info blocks) (X86Program (check-info info) blocks)]))
+    [(X86Program info blocks)
+     (let* ([var-to-color (color_graph (dict-ref info 'conflicts)
+                                       (dict-keys (dict-ref info 'locals-types)))]
+            [info (dict-set info 'colors var-to-color)]
+            [reg_list (map Reg '(rcx))]
+            [max_color (foldl (lambda (x y) (max (cdr x) y)) 0 var-to-color)]
+            [color-to-home (get-color-to-home reg_list 0 max_color -8)]
+            [info (dict-set info 'homes color-to-home)]
+            [new_blocks
+             (map (lambda (x) (allocate-register-block x var-to-color color-to-home)) blocks)])
+       (X86Program info new_blocks))]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Define the compiler passes to be used by interp-tests and the grader
@@ -398,7 +493,6 @@
     ("instruction selection" ,select-instructions ,interp-x86-0)
     ("liveness analysis" ,uncover_live ,interp-x86-0)
     ("build interference" ,build-interference ,interp-x86-0)
-    ("allocate registers", allocate-registers, interp-x86-0)
-    ("assign homes" ,assign-homes ,interp-x86-0)
+    ("allocate registers" ,allocate-registers ,interp-x86-0)
     ("patch instructions" ,patch-instructions ,interp-x86-0)
     ("prelude-and-conclusion" ,prelude-and-conclusion ,interp-x86-0)))
