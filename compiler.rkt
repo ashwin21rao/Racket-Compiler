@@ -434,29 +434,25 @@
                     (pqueue-push! w (cons var (set))))]
          [counter 0]
          [_ (for ([e registers-used])
-                (set! var_color (append var_color (list (cons e (register->color e)))))
-                (update-saturations graph handles e (register->color e))
+                (set! var_color (append var_color (list (cons e (register->color (Reg-name e))))))
+                (update-saturations graph handles e (register->color (Reg-name e)))
+                (set! counter (+ 1 counter))
               )]
          [n (pqueue-count w)]
          [vars (not-while-loop n graph handles w)]
          [var_color (append var_color vars)])
     var_color))
 
-(define (get-color-to-home reg_list current_color max_color offset)
-  (cond
-    [(> current_color max_color) '()]
-    [(empty? reg_list)
-     (let* ([current_map (cons current_color (Deref 'rbp offset))]
-            [current_map
-             (append (list current_map)
-                     (get-color-to-home reg_list (+ 1 current_color) max_color (- offset 8)))])
-       current_map)]
-    [else (let* ([current_map (cons current_color (car reg_list))]
-                 [current_map
-                  (append (list current_map)
-                          (get-color-to-home (rest reg_list) (+ 1 current_color) max_color offset))])
-            current_map)]))
-
+(define (get-color-to-home colors)
+  (let* ([max-register (num-registers-for-alloc)]
+         [cth (for/list ([color colors])
+            (cond 
+                [(< color max-register) (cons color (Reg (color->register color)))]
+                [else (cons color (Deref 'rbp (- (* 8 (+ 1 (- color max-register))))))]
+               )
+              )]
+         ) cth)
+  )
 (define (allocate-register-instrs inst_list vtc cth)
   (for/list ([inst inst_list])
     (match inst
@@ -477,11 +473,11 @@
   (match p
     [(X86Program info blocks)
      (let* ([var-to-color (color_graph (dict-ref info 'conflicts)
-                                       (sort (dict-keys (dict-ref info 'locals-types)) symbol<?))]
+                                       (dict-keys (dict-ref info 'locals-types)))]
+            ;; var-to-color :-> (temp: 0, temp2: 0)
             [info (dict-set info 'colors var-to-color)]
-            [reg_list (map Reg (vector->list registers-for-alloc))]
-            [max_color (foldl (lambda (x y) (max (cdr x) y)) 0 var-to-color)]
-            [color-to-home (get-color-to-home reg_list 0 max_color -8)]
+            [colors (list->set (filter (lambda (x) (>= x 0)) (map cdr var-to-color)))]
+            [color-to-home (get-color-to-home colors)]
             [info (dict-set info 'homes color-to-home)]
             [new_blocks
              (map (lambda (x) (allocate-register-block x var-to-color color-to-home)) blocks)])
