@@ -426,12 +426,17 @@
             lst)]))
 
 (define (color_graph graph vars)
-  (let* ([var_color (list (cons (Reg 'rax) -1) (cons (Reg 'rsp) -2))]
+  (let* ([vertices (get-vertices graph)]
+         [registers-used (filter (lambda (x) (Reg? x)) vertices)]
+         [var_color '()]
          [w (make-pqueue saturation-cmp)]
          [handles (for/list ([var vars])
                     (pqueue-push! w (cons var (set))))]
-         [call1 (update-saturations graph handles (Reg 'rax) -1)]
-         [call2 (update-saturations graph handles (Reg 'rsp) -2)]
+         [counter 0]
+         [_ (for ([e registers-used])
+                (set! var_color (append var_color (list (cons e (register->color e)))))
+                (update-saturations graph handles e (register->color e))
+              )]
          [n (pqueue-count w)]
          [vars (not-while-loop n graph handles w)]
          [var_color (append var_color vars)])
@@ -474,7 +479,7 @@
      (let* ([var-to-color (color_graph (dict-ref info 'conflicts)
                                        (sort (dict-keys (dict-ref info 'locals-types)) symbol<?))]
             [info (dict-set info 'colors var-to-color)]
-            [reg_list (map Reg '(rcx))]
+            [reg_list (map Reg (vector->list registers-for-alloc))]
             [max_color (foldl (lambda (x y) (max (cdr x) y)) 0 var-to-color)]
             [color-to-home (get-color-to-home reg_list 0 max_color -8)]
             [info (dict-set info 'homes color-to-home)]
