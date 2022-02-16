@@ -254,6 +254,7 @@
 (define (fix-instructions inst_list)
   (for/list ([inst inst_list])
     (match inst
+      [(Instr op (list arg arg)) empty]
       [(Instr op (list (Deref reg1 off1) (Deref reg2 off2)))
        (let* ([instr1 (Instr 'movq (list (Deref reg1 off1) (Reg 'rax)))]
               [instr2 (Instr op (list (Reg 'rax) (Deref reg2 off2)))])
@@ -278,7 +279,7 @@
   (match p
     [(X86Program info blocks)
      (X86Program info
-                 (let* ([stacksize (* 8 (+ 2 (length (dict-keys (dict-ref info 'locals-types)))))]
+                 (let* ([stacksize (* 8 (length (dict-keys (dict-ref info 'locals-types))))]
                         [stacksize (+ stacksize (modulo stacksize 16))]
                         [instr1 (Instr 'pushq (list (Reg 'rbp)))]
                         [instr2 (Instr 'movq (list (Reg 'rsp) (Reg 'rbp)))]
@@ -471,7 +472,7 @@
   (match p
     [(X86Program info blocks)
      (let* ([var-to-color (color_graph (dict-ref info 'conflicts)
-                                       (dict-keys (dict-ref info 'locals-types)))]
+                                       (sort (dict-keys (dict-ref info 'locals-types)) symbol<?))]
             [info (dict-set info 'colors var-to-color)]
             [reg_list (map Reg '(rcx))]
             [max_color (foldl (lambda (x y) (max (cdr x) y)) 0 var-to-color)]
