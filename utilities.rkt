@@ -363,6 +363,7 @@ Changelog:
                 (newline port)])]
         [else
          (write-string (symbol->string label) port)
+         (newline port)
          (write-string ":" port)
          (newline port)
          (recur data port)

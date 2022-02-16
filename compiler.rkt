@@ -3,11 +3,14 @@
          racket/stream)
 (require racket/dict)
 (require racket/fixnum)
+(require graph)
 ;;(require "interp-Lint.rkt")
 (require "interp-Lvar.rkt")
 (require "interp-Cvar.rkt")
 (require "interp.rkt")
 (require "utilities.rkt")
+(require "priority_queue.rkt")
+(require "heap.rkt")
 (provide (all-defined-out))
 (require racket/trace)
 (require "type-check-Lvar.rkt")
@@ -33,6 +36,7 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Partial evaluation for Lvar language
+;; TODO change partial evaluation in the other branch too
 ;; Bonus question pass
 (define (pe-neg r)
   (match r
@@ -62,6 +66,7 @@
     [(exp1 exp2) (let* ([data (make-inert (Prim '+ (list exp1 exp2)))]
                         [exp_f (cdr data)]
                         [ret (cond
+                               [(= 0 (car data)) exp_f]
                                [(empty? exp_f) (Int (car data))]
                                [else (Prim '+ (list (Int (car data)) (cdr data)))])])
                    ret)]))
@@ -122,10 +127,11 @@
                          [new_var (Var new_sym)]
                          [pairs (map rco-atom es)]
                          [atoms (map car pairs)]
-                         [vs (append (foldr append '() (map cdr pairs)) (list (cons new_sym (Prim op atoms))))])
+                         [vs (append (foldr append '() (map cdr pairs))
+                                     (list (cons new_sym (Prim op atoms))))])
                     (cons new_var vs))]))
 
-(trace-define (gen-lets lst)
+(define (gen-lets lst)
   (cond
     [(= 1 (length lst)) (cdar lst)]
     [else (Let (caar lst) (cdar lst) (gen-lets (rest lst)))]))
@@ -287,15 +293,206 @@
                    blocks))]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(define (filter-var-reg lst)
+  (list->set (filter (lambda (x) (or (Var? x) (Reg? x))) lst)))
+
+(define (instr-location-read instr)
+  (let* ([live_list (match instr
+                      [(Instr 'movq (list arg1 arg2)) (list arg1)]
+                      [(Instr 'addq (list arg1 arg2)) (list arg1 arg2)]
+                      [(Instr 'subq (list arg1 arg2)) (list arg1 arg2)]
+                      [(Instr 'negq (list arg1)) (list arg1)]
+                      [(Callq x y) (map Reg
+                                        (take '(rdi rsi rdx rcx r8 r9)
+                                              y))] ;; TODO what happens if more than 6 args
+                      [(Jmp label) empty]
+                      [else (error "Invalid instruction" instr)])]
+         [filter_list (filter (lambda (x) (or (Var? x) (Reg? x))) live_list)])
+    (list->set filter_list)))
+
+(define (instr-location-written instr)
+  (let* ([live_list (match instr
+                      [(Instr op es) (list (last es))]
+                      [(Callq x y)
+                       (map Reg '(rax rcx rdx rsi rdi r8 r9 r10 r11))] ;; make these actual registers
+                      [(Jmp label) empty]
+                      [else (error "Invalid instruction" instr)])]
+         [filter_list (filter (lambda (x) (or (Var? x) (Reg? x))) live_list)])
+    (list->set filter_list)))
+
+(define (uncover-live-instrs instrs prev_liveness)
+  (match instrs
+    [(list) empty]
+    [else
+     (let* ([instr (first instrs)]
+            [prev_liveness (match instr
+                             [(Jmp label) (set (Reg 'rax) (Reg 'rsp))]
+                             [else prev_liveness])]
+            [locations_read (instr-location-read instr)]
+            [locations_written (instr-location-written instr)]
+            [new_liveness (set-union (set-subtract prev_liveness locations_written) locations_read)])
+       (append (uncover-live-instrs (rest instrs) new_liveness) (list new_liveness)))]))
+
+(define (uncover-live-block blck)
+  (match blck
+    [(cons label (Block info instrs))
+     (cons label
+           (Block (dict-set info 'liveness (uncover-live-instrs (reverse instrs) (list (set))))
+                  instrs))]))
+
+(define (uncover_live p)
+  (match p
+    [(X86Program info blocks) (X86Program info (map uncover-live-block blocks))]))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(define (get-edges instr_k l_after)
+  (let* ([var_written (match instr_k
+                        [(Instr 'movq es) (filter-var-reg es)]
+                        [else (instr-location-written instr_k)])]
+         [l_left (set-subtract l_after var_written)] ;; remove both d, s from l_after
+         [l_left_list (set->list l_left)]
+         [var_written_list (set->list var_written)]
+         [var_written_list
+          (match instr_k
+            [(Instr 'movq es) (list (last es))] ;; incase of movq only make edges from the dest
+            [else var_written_list])] ;; make edges from all the written variables
+         [edges (cartesian-product var_written_list l_left_list)])
+    edges))
+
+(define (flatten-one lst)
+  (foldr append '() lst))
+
+(define (get-liveness-from-block blck)
+  (let* ([info (Block-info (cdr blck))]
+         [liveness (dict-ref info 'liveness)]
+         [liveness (append (cdr liveness) (list (set)))])
+    liveness))
+
+(define (build-interference p)
+  (match p
+    [(X86Program info blocks)
+     (let* ([instrs (flatten-one (map (lambda (blck) (Block-instr* (cdr blck))) blocks))]
+            [liveness (flatten-one (map get-liveness-from-block blocks))]
+            [edges (map get-edges instrs liveness)]
+            [graph (undirected-graph (foldr append '() edges))]
+            [info (dict-set info 'conflict-edges edges)]
+            [info (dict-set info 'conflicts graph)])
+       (X86Program info blocks))]))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(define (saturation-cmp x y)
+  (match* (x y)
+    [((cons var_x sat_x) (cons var_y sat_y)) (> (set-count sat_x) (set-count sat_y))]
+    [(_ _) (error "Invalid comparison")]))
+
+(define (get-var x)
+  (car (node-key x)))
+(define (get-sat x)
+  (cdr (node-key x)))
+
+(define (find-handle-neigh handle neighbours)
+  (or (member (Reg (get-var handle)) neighbours) (member (Var (get-var handle)) neighbours)))
+
+(define (update-saturation handle color)
+  (let* ([var (get-var handle)]
+         [saturation (get-sat handle)]
+         [new_sat (set-union saturation (set color))])
+    (set-node-key! handle (cons var new_sat))))
+
+(define (update-saturations graph handles var color)
+  (let* ([neighbours (sequence->list (in-neighbors graph var))]
+         [neighbour-handles (filter (lambda (x) (find-handle-neigh x neighbours)) handles)]
+         [_ (map (lambda (x) (update-saturation x color)) neighbour-handles)])
+    color))
+
+(define (get_greedy_color sat_popped num)
+  (if (set-member? sat_popped num) (get_greedy_color sat_popped (+ num 1)) num))
+
+(define (not-while-loop n graph handles w)
+  (cond
+    [(= n 0) '()]
+    [else (let* ([node_popped (pqueue-pop! w)]
+                 [var_popped (car node_popped)]
+                 [sat_popped (cdr node_popped)]
+                 [reqd_color (get_greedy_color sat_popped 0)]
+                 [color_pair (cons (Var var_popped) reqd_color)]
+                 [handles (filter (lambda (x) (not (equal? (car (node-key x)) var_popped)))
+                                  handles)] ;; remove the popped element from handles
+                 [_ (update-saturations graph handles (Var var_popped) reqd_color)]
+                 [lst (append (list color_pair) (not-while-loop (- n 1) graph handles w))])
+            lst)]))
+
+(define (color_graph graph vars)
+  (let* ([var_color (list (cons (Reg 'rax) -1) (cons (Reg 'rsp) -2))]
+         [w (make-pqueue saturation-cmp)]
+         [handles (for/list ([var vars])
+                    (pqueue-push! w (cons var (set))))]
+         [call1 (update-saturations graph handles (Reg 'rax) -1)]
+         [call2 (update-saturations graph handles (Reg 'rsp) -2)]
+         [n (pqueue-count w)]
+         [vars (not-while-loop n graph handles w)]
+         [var_color (append var_color vars)])
+    var_color))
+
+(define (get-color-to-home reg_list current_color max_color offset)
+  (cond
+    [(> current_color max_color) '()]
+    [(empty? reg_list)
+     (let* ([current_map (cons current_color (Deref 'rbp offset))]
+            [current_map
+             (append (list current_map)
+                     (get-color-to-home reg_list (+ 1 current_color) max_color (- offset 8)))])
+       current_map)]
+    [else (let* ([current_map (cons current_color (car reg_list))]
+                 [current_map
+                  (append (list current_map)
+                          (get-color-to-home (rest reg_list) (+ 1 current_color) max_color offset))])
+            current_map)]))
+
+(define (allocate-register-instrs inst_list vtc cth)
+  (for/list ([inst inst_list])
+    (match inst
+      [(Instr op args)
+       (Instr op
+              (for/list ([arg args])
+                (match arg
+                  [(Var v) (let* ([color (dict-ref vtc (Var v))] [home (dict-ref cth color)]) home)]
+                  [else arg])))]
+      [else inst])))
+
+(define (allocate-register-block cur_block vtc cth)
+  (match cur_block
+    [(cons label (Block info instr_list))
+     (cons label (Block info (allocate-register-instrs instr_list vtc cth)))]))
+
+(define (allocate-registers p)
+  (match p
+    [(X86Program info blocks)
+     (let* ([var-to-color (color_graph (dict-ref info 'conflicts)
+                                       (dict-keys (dict-ref info 'locals-types)))]
+            [info (dict-set info 'colors var-to-color)]
+            [reg_list (map Reg '(rcx))]
+            [max_color (foldl (lambda (x y) (max (cdr x) y)) 0 var-to-color)]
+            [color-to-home (get-color-to-home reg_list 0 max_color -8)]
+            [info (dict-set info 'homes color-to-home)]
+            [new_blocks
+             (map (lambda (x) (allocate-register-block x var-to-color color-to-home)) blocks)])
+       (X86Program info new_blocks))]))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Define the compiler passes to be used by interp-tests and the grader
 ;; Note that your compiler file (the file that defines the passes)
 ;; must be named "compiler.rkt"
 (define compiler-passes
-  `(("partial evaluation" ,pe-Lvar ,interp-Lvar)
-    ("uniquify" ,uniquify ,interp-Lvar)
+  ;; ("partial evaluation" ,pe-Lvar ,interp-Lvar)
+  `(("uniquify" ,uniquify ,interp-Lvar)
     ("remove complex opera*" ,remove-complex-opera* ,interp-Lvar ,type-check-Lvar)
     ("explicate control" ,explicate-control ,interp-Cvar ,type-check-Cvar)
     ("instruction selection" ,select-instructions ,interp-x86-0)
-    ("assign homes" ,assign-homes ,interp-x86-0)
+    ("liveness analysis" ,uncover_live ,interp-x86-0)
+    ("build interference" ,build-interference ,interp-x86-0)
+    ("allocate registers" ,allocate-registers ,interp-x86-0)
     ("patch instructions" ,patch-instructions ,interp-x86-0)
     ("prelude-and-conclusion" ,prelude-and-conclusion ,interp-x86-0)))
