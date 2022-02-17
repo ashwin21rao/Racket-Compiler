@@ -281,15 +281,26 @@
      (X86Program info
                  (let* ([stacksize (* 8 (length (dict-keys (dict-ref info 'locals-types))))]
                         [stacksize (+ stacksize (modulo stacksize 16))]
+                        [callee-saved (dict-ref info 'used_callee)]
                         [instr1 (Instr 'pushq (list (Reg 'rbp)))]
                         [instr2 (Instr 'movq (list (Reg 'rsp) (Reg 'rbp)))]
+                        [instr-callee-push (for/list ([reg callee-saved])
+                                        (Instr 'pushq (list reg)))]
+                        [instr-callee-pop (for/list ([reg callee-saved])
+                                        (Instr 'popq (list reg)))]
+                        [callee-size (* 8 (length callee-saved))]
+                        [spills (dict-ref info 'num_spilled)]
+                        [local_var_size (* 8 spills)]
+                        [stacksize (+ callee-size local_var_size)]
+                        [stacksize (+ stacksize (modulo stacksize 16))]
+                        [stacksize (- stacksize callee-size)]
                         [instr3 (Instr 'subq (list (Imm stacksize) (Reg 'rsp)))]
                         [instr4 (Jmp 'start)]
                         [instr5 (Instr 'addq (list (Imm stacksize) (Reg 'rsp)))]
                         [instr6 (Instr 'popq (list (Reg 'rbp)))]
                         [instr7 (Retq)]
-                        [main_block (Block empty (list instr1 instr2 instr3 instr4))]
-                        [conclusion_block (Block empty (list instr5 instr6 instr7))]
+                        [main_block (Block empty (flatten (list instr1 instr2 instr-callee-push instr3 instr4)))]
+                        [conclusion_block (Block empty (flatten (list instr5 instr-callee-pop instr6 instr7)))]
                         [blocks (dict-set* blocks 'main main_block 'conclusion conclusion_block)])
                    blocks))]))
 
@@ -370,14 +381,20 @@
          [liveness (append (cdr liveness) (list (set)))])
     liveness))
 
+(define (remove-liveness blck)
+  (match blck
+    [(cons label (Block info instrs)) (cons label (Block (dict-remove info 'liveness) instrs))]
+    ))
+
 (define (build-interference p)
   (match p
     [(X86Program info blocks)
      (let* ([instrs (flatten-one (map (lambda (blck) (Block-instr* (cdr blck))) blocks))]
             [liveness (flatten-one (map get-liveness-from-block blocks))]
+            [blocks (map remove-liveness blocks)]
             [edges (map get-edges instrs liveness)]
             [graph (undirected-graph (foldr append '() edges))]
-            [info (dict-set info 'conflict-edges edges)]
+            ;; [info (dict-set info 'conflict-edges edges)]
             [info (dict-set info 'conflicts graph)])
        (X86Program info blocks))]))
 
@@ -443,16 +460,25 @@
          [var_color (append var_color vars)])
     var_color))
 
-(define (get-color-to-home colors)
-  (let* ([max-register (num-registers-for-alloc)]
+(define (get-color-to-home colors num_used_callee)
+  (let* ([max_register (num-registers-for-alloc)]
          [cth (for/list ([color colors])
             (cond 
-                [(< color max-register) (cons color (Reg (color->register color)))]
-                [else (cons color (Deref 'rbp (- (* 8 (+ 1 (- color max-register))))))]
-               )
-              )]
+                [(< color max_register) (cons color (Reg (color->register color)))]
+                [else 
+                  (let* ([offset 8]
+                         [callee_space (* 8 num_used_callee)]
+                         [offset_space (* 8 (- color max_register))]
+                         [total_offset (+ offset (+ callee_space offset_space))]
+                         [total_offset (- total_offset)]
+                         )
+                  (cons color (Deref 'rbp total_offset))
+                    )
+               ]
+              ))]
          ) cth)
   )
+
 (define (allocate-register-instrs inst_list vtc cth)
   (for/list ([inst inst_list])
     (match inst
@@ -474,11 +500,16 @@
     [(X86Program info blocks)
      (let* ([var-to-color (color_graph (dict-ref info 'conflicts)
                                        (dict-keys (dict-ref info 'locals-types)))]
-            ;; var-to-color :-> (temp: 0, temp2: 0)
             [info (dict-set info 'colors var-to-color)]
             [colors (list->set (filter (lambda (x) (>= x 0)) (map cdr var-to-color)))]
-            [color-to-home (get-color-to-home colors)]
+            [used_callee (map Reg '(rbx r12 r13 r14 r15))];; assume we are using all the callee saved registers
+            [num_used_callee (set-count used_callee)]
+            [color-to-home (get-color-to-home colors num_used_callee)]
+            [num_spilled (length (filter (lambda (x) (Deref? (cdr x))) color-to-home))]
+            [info (dict-set info 'used_callee used_callee)]
+            [info (dict-set info 'num_spilled num_spilled)]
             [info (dict-set info 'homes color-to-home)]
+            [info (dict-remove info 'liveness)]
             [new_blocks
              (map (lambda (x) (allocate-register-block x var-to-color color-to-home)) blocks)])
        (X86Program info new_blocks))]))
