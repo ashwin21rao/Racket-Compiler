@@ -1,1 +1,0 @@
-Callq is overriding rcx, back it up before calling or it should be interfering
