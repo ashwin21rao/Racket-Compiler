@@ -358,7 +358,7 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(define (get-edges instr_k l_after)
+(define (get-interference-edges instr_k l_after)
   (let* ([var_written (match instr_k
                         [(Instr 'movq es) (filter-var-reg es)]
                         [else (instr-location-written instr_k)])]
@@ -386,17 +386,27 @@
     [(cons label (Block info instrs)) (cons label (Block (dict-remove info 'liveness) instrs))]
     ))
 
+(define (build-move-graph instrs)
+  (match instrs
+    [(list) empty]
+    [(list (Instr 'movq (list (Var x) (Var y))) rst ...) (cons (list (Var x) (Var y)) (build-move-graph (rest instrs)))]
+    [else (build-move-graph (rest instrs))]
+    ))
+
 (define (build-interference p)
   (match p
     [(X86Program info blocks)
      (let* ([instrs (flatten-one (map (lambda (blck) (Block-instr* (cdr blck))) blocks))]
             [liveness (flatten-one (map get-liveness-from-block blocks))]
             [blocks (map remove-liveness blocks)]
-            [edges (map get-edges instrs liveness)]
+            [edges (map get-interference-edges instrs liveness)]
             [graph (undirected-graph (foldr append '() edges))]
             ;; [info (dict-set info 'conflict-edges edges)]
-            [info (dict-set info 'conflicts graph)])
+            [mg (undirected-graph (build-move-graph instrs))]
+            [mg-edges (get-edges mg)]
+            [info (dict-set* info 'conflicts graph 'move-graph mg 'mg-edges mg-edges)])
        (X86Program info blocks))]))
+
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
