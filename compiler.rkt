@@ -4,17 +4,22 @@
 (require racket/dict)
 (require racket/fixnum)
 (require graph)
-;;(require "interp-Lint.rkt")
-(require "interp-Lvar.rkt")
-(require "interp-Cvar.rkt")
+;; (require "interp-Lint.rkt")
+;; (require "interp-Lvar.rkt")
+;; (require "interp-Cvar.rkt")
+(require "interp-Lif.rkt")
+(require "interp-Cif.rkt")
 (require "interp.rkt")
+
 (require "utilities.rkt")
 (require "priority_queue.rkt")
 (require "heap.rkt")
 (provide (all-defined-out))
 (require racket/trace)
-(require "type-check-Lvar.rkt")
-(require "type-check-Cvar.rkt")
+;; (require "type-check-Lvar.rkt")
+;; (require "type-check-Cvar.rkt")
+(require "type-check-Lif.rkt")
+(require "type-check-Cif.rkt")
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Lint examples
@@ -36,7 +41,6 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Partial evaluation for Lvar language
-;; TODO change partial evaluation in the other branch too
 ;; Bonus question pass
 (define (pe-neg r)
   (match r
@@ -89,16 +93,31 @@
 (define (pe-Lvar p)
   (match p
     [(Program info e) (Program info (pe-exp e))]))
-
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; HW1 Passes ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;; shrink Lif -> Lif
+(define (shrink p)
+  (match p
+    [(Program info e) (Program info (shrink e))]
+    [(Var x) (Var x)]
+    [(Int x) (Int x)]
+    [(Bool x) (Bool x)]
+    [(Let x rhs body) (Let x (shrink rhs) (shrink body))]
+    [(If cnd e1 e2) (If (shrink cnd) (shrink e1) (shrink e2))]
+    [(Prim 'and (list e1 e2)) (If (shrink e1) (shrink e2) (Bool #f))]
+    [(Prim 'or (list e1 e2)) (If (shrink e1) (Bool #t) (shrink e2))]
+    [(Prim op es) (Prim op (map shrink es))]
+    [else (error "Shrink unhandled case" p)]))
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (define (uniquify-exp env)
   (lambda (e)
     (match e
       [(Var x) (Var (dict-ref env x))]
+      [(Bool b) (Bool b)]
       [(Int n) (Int n)]
+      [(If e1 e2 e3) (If ((uniquify-exp env) e1) ((uniquify-exp env) e2) ((uniquify-exp env) e3))]
       [(Let x e body) (let* ([new_x (gensym x)] [new_env (dict-set env x new_x)])
                         (Let new_x ((uniquify-exp env) e) ((uniquify-exp new_env) body)))]
       [(Prim op es) (Prim op
@@ -117,6 +136,8 @@
   (match expr
     [(Var x) (cons (Var x) '())]
     [(Int x) (cons (Int x) '())]
+    [(Bool x) (cons (Bool x) '())]
+    [(If cmp e1 e2) (If (rco-exp cmp) (rco-exp e1) (rco-exp e2))]
     [(Let x e body) (let* ([new_sym (gensym 'temp)]
                            [new_var (Var new_sym)]
                            [list_1 (cons x (rco-exp e))]
@@ -140,9 +161,10 @@
   (match e
     [(Var x) (Var x)]
     [(Int x) (Int x)]
-    [(Prim 'read '()) (Prim 'read '())]
+    [(Bool b) (Bool b)]
     [(Let x e body) (Let x (rco-exp e) (rco-exp body))]
-    [(Prim op es) (gen-lets (cdr (rco-atom (Prim op es))))]))
+    [(Prim op es) (gen-lets (cdr (rco-atom (Prim op es))))]
+    [(If cmp e1 e2) (If (rco-exp cmp) (rco-exp e1) (rco-exp e2))]))
 
 ;; remove-complex-opera* : R1 -> R1
 (define (remove-complex-opera* p)
@@ -151,29 +173,57 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-;; explicate-tail : Lvar -> C0 tail
+(define blocks (make-hash))
+
+(define (assign-label blck)
+  (let* ([label (gensym 'label)] [_ (dict-set! blocks label blck)] [lab (Goto label)]) lab))
+
+;; explicate-pred: Lif, e1, e2 -> C1 tail
+(define (explicate-pred pred e1 e2)
+  (match pred
+    [(Bool #t) e1] ;; partial evaluation
+    [(Bool #f) e2]
+    [(Prim cmp (list atm1 atm2)) (let * ([l1 (assign-label e1)] [l2 (assign-label e2)])
+                                   (IfStmt (Prim cmp (list atm1 atm2)) l1 l2))]
+    [(If cnd exp1 exp2) (let* ([l1 (assign-label e1)]
+                               [l2 (assign-label e2)]
+                               [B1 (explicate-pred exp1 l1 l2)]
+                               [B2 (explicate-pred exp2 l1 l2)])
+                          (explicate-pred cnd B1 B2))]
+    [(Let x rhs body) (let* ([body (explicate-pred body e1 e2)]) (explicate-assign rhs x body))]
+    [else (error "explicate-pred unhandled case" pred)]))
+
+;; explicate-tail : Lif -> C1 tail
 (define (explicate-tail e)
   (match e
     [(Var x) (Return (Var x))]
     [(Int n) (Return (Int n))]
-    [(Let x rhs body) (let* ([tail (explicate-tail body)] [nt (explicate-assign rhs x tail)]) nt)]
+    [(Bool b) (Return (Bool b))]
     [(Prim op es) (Return (Prim op es))]
+    [(Let x rhs body) (let* ([tail (explicate-tail body)] [nt (explicate-assign rhs x tail)]) nt)]
+    [(If cnd e1 e2) (let* ([tail1 (explicate-tail e1)] [tail2 (explicate-tail e2)])
+                      (explicate-pred cnd tail1 tail2))]
     [else (error "explicate-tail unhandled case" e)]))
 
-;; explicate_assign : Lvar, Var x, C0 tail -> C0 tail
+;; explicate_assign : Lif, Var x, C1 tail -> C1 tail
 (define (explicate-assign e x cont)
   (match e
     [(Var y) (Seq (Assign (Var x) (Var y)) cont)]
     [(Int n) (Seq (Assign (Var x) (Int n)) cont)]
+    [(Bool b) (Seq (Assign (Var x) (Bool b)) cont)]
+    [(Prim op es) (Seq (Assign (Var x) (Prim op es)) cont)]
+    [(If cnd e1 e2) (let* ([l1 (assign-label cont)]
+                           [tail1 (explicate-assign e1 x l1)]
+                           [tail2 (explicate-assign e2 x l1)])
+                      (explicate-pred cnd tail1 tail2))]
     [(Let y rhs body)
      (let* ([tail (explicate-assign body x cont)] [nt (explicate-assign rhs y tail)]) nt)]
-    [(Prim op es) (Seq (Assign (Var x) (Prim op es)) cont)]
     [else (error "explicate-assign unhandled case" e)]))
 
-;; explicate-control : R1 -> C0
+;; explicate-control : Lif -> C1
 (define (explicate-control p)
   (match p
-    [(Program info body) (CProgram info (list (cons 'start (explicate-tail body))))]))
+    [(Program info body) (CProgram info (let* ([a (dict-set! blocks 'start (explicate-tail body))]) blocks))]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -278,31 +328,32 @@
 (define (prelude-and-conclusion p)
   (match p
     [(X86Program info blocks)
-     (X86Program info
-                 (let* ([stacksize (* 8 (length (dict-keys (dict-ref info 'locals-types))))]
-                        [stacksize (+ stacksize (modulo stacksize 16))]
-                        [callee-saved (dict-ref info 'used_callee)]
-                        [instr1 (Instr 'pushq (list (Reg 'rbp)))]
-                        [instr2 (Instr 'movq (list (Reg 'rsp) (Reg 'rbp)))]
-                        [instr-callee-push (for/list ([reg callee-saved])
-                                        (Instr 'pushq (list reg)))]
-                        [instr-callee-pop (for/list ([reg callee-saved])
-                                        (Instr 'popq (list reg)))]
-                        [callee-size (* 8 (length callee-saved))]
-                        [spills (dict-ref info 'num_spilled)]
-                        [local_var_size (* 8 spills)]
-                        [stacksize (+ callee-size local_var_size)]
-                        [stacksize (+ stacksize (modulo stacksize 16))]
-                        [stacksize (- stacksize callee-size)]
-                        [instr3 (Instr 'subq (list (Imm stacksize) (Reg 'rsp)))]
-                        [instr4 (Jmp 'start)]
-                        [instr5 (Instr 'addq (list (Imm stacksize) (Reg 'rsp)))]
-                        [instr6 (Instr 'popq (list (Reg 'rbp)))]
-                        [instr7 (Retq)]
-                        [main_block (Block empty (flatten (list instr1 instr2 instr-callee-push instr3 instr4)))]
-                        [conclusion_block (Block empty (flatten (list instr5 instr-callee-pop instr6 instr7)))]
-                        [blocks (dict-set* blocks 'main main_block 'conclusion conclusion_block)])
-                   blocks))]))
+     (X86Program
+      info
+      (let* ([stacksize (* 8 (length (dict-keys (dict-ref info 'locals-types))))]
+             [stacksize (+ stacksize (modulo stacksize 16))]
+             [callee-saved (dict-ref info 'used_callee)]
+             [instr1 (Instr 'pushq (list (Reg 'rbp)))]
+             [instr2 (Instr 'movq (list (Reg 'rsp) (Reg 'rbp)))]
+             [instr-callee-push (for/list ([reg callee-saved])
+                                  (Instr 'pushq (list reg)))]
+             [instr-callee-pop (for/list ([reg callee-saved])
+                                 (Instr 'popq (list reg)))]
+             [callee-size (* 8 (length callee-saved))]
+             [spills (dict-ref info 'num_spilled)]
+             [local_var_size (* 8 spills)]
+             [stacksize (+ callee-size local_var_size)]
+             [stacksize (+ stacksize (modulo stacksize 16))]
+             [stacksize (- stacksize callee-size)]
+             [instr3 (Instr 'subq (list (Imm stacksize) (Reg 'rsp)))]
+             [instr4 (Jmp 'start)]
+             [instr5 (Instr 'addq (list (Imm stacksize) (Reg 'rsp)))]
+             [instr6 (Instr 'popq (list (Reg 'rbp)))]
+             [instr7 (Retq)]
+             [main_block (Block empty (flatten (list instr1 instr2 instr-callee-push instr3 instr4)))]
+             [conclusion_block (Block empty (flatten (list instr5 instr-callee-pop instr6 instr7)))]
+             [blocks (dict-set* blocks 'main main_block 'conclusion conclusion_block)])
+        blocks))]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (define (filter-var-reg lst)
@@ -383,15 +434,14 @@
 
 (define (remove-liveness blck)
   (match blck
-    [(cons label (Block info instrs)) (cons label (Block (dict-remove info 'liveness) instrs))]
-    ))
+    [(cons label (Block info instrs)) (cons label (Block (dict-remove info 'liveness) instrs))]))
 
 (define (build-move-graph instrs)
   (match instrs
     [(list) empty]
-    [(list (Instr 'movq (list (Var x) (Var y))) rst ...) (cons (list (Var x) (Var y)) (build-move-graph (rest instrs)))]
-    [else (build-move-graph (rest instrs))]
-    ))
+    [(list (Instr 'movq (list (Var x) (Var y))) rst ...)
+     (cons (list (Var x) (Var y)) (build-move-graph (rest instrs)))]
+    [else (build-move-graph (rest instrs))]))
 
 (define (build-interference p)
   (match p
@@ -406,7 +456,6 @@
             [mg-edges (get-edges mg)]
             [info (dict-set* info 'conflicts graph 'move-graph mg 'mg-edges mg-edges)])
        (X86Program info blocks))]))
-
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -461,10 +510,9 @@
                     (pqueue-push! w (cons var (set))))]
          [counter 0]
          [_ (for ([e registers-used])
-                (set! var_color (append var_color (list (cons e (register->color (Reg-name e))))))
-                (update-saturations graph handles e (register->color (Reg-name e)))
-                (set! counter (+ 1 counter))
-              )]
+              (set! var_color (append var_color (list (cons e (register->color (Reg-name e))))))
+              (update-saturations graph handles e (register->color (Reg-name e)))
+              (set! counter (+ 1 counter)))]
          [n (pqueue-count w)]
          [vars (not-while-loop n graph handles w)]
          [var_color (append var_color vars)])
@@ -473,21 +521,15 @@
 (define (get-color-to-home colors num_used_callee)
   (let* ([max_register (num-registers-for-alloc)]
          [cth (for/list ([color colors])
-            (cond 
-                [(< color max_register) (cons color (Reg (color->register color)))]
-                [else 
-                  (let* ([offset 8]
-                         [callee_space (* 8 num_used_callee)]
-                         [offset_space (* 8 (- color max_register))]
-                         [total_offset (+ offset (+ callee_space offset_space))]
-                         [total_offset (- total_offset)]
-                         )
-                  (cons color (Deref 'rbp total_offset))
-                    )
-               ]
-              ))]
-         ) cth)
-  )
+                (cond
+                  [(< color max_register) (cons color (Reg (color->register color)))]
+                  [else (let* ([offset 8]
+                               [callee_space (* 8 num_used_callee)]
+                               [offset_space (* 8 (- color max_register))]
+                               [total_offset (+ offset (+ callee_space offset_space))]
+                               [total_offset (- total_offset)])
+                          (cons color (Deref 'rbp total_offset)))]))])
+    cth))
 
 (define (allocate-register-instrs inst_list vtc cth)
   (for/list ([inst inst_list])
@@ -512,7 +554,8 @@
                                        (dict-keys (dict-ref info 'locals-types)))]
             [info (dict-set info 'colors var-to-color)]
             [colors (list->set (filter (lambda (x) (>= x 0)) (map cdr var-to-color)))]
-            [used_callee (map Reg '(rbx r12 r13 r14 r15))];; assume we are using all the callee saved registers
+            [used_callee
+             (map Reg '(rbx r12 r13 r14 r15))] ;; assume we are using all the callee saved registers
             [num_used_callee (set-count used_callee)]
             [color-to-home (get-color-to-home colors num_used_callee)]
             [num_spilled (length (filter (lambda (x) (Deref? (cdr x))) color-to-home))]
@@ -520,8 +563,8 @@
             [info (dict-set info 'num_spilled num_spilled)]
             [info (dict-set info 'homes color-to-home)]
             [info (dict-remove info 'liveness)]
-            [new_blocks
-             (map (lambda (x) (allocate-register-block x var-to-color color-to-home)) blocks)])
+            [new_blocks (map (lambda (x) (allocate-register-block x var-to-color color-to-home))
+                             blocks)])
        (X86Program info new_blocks))]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -530,12 +573,15 @@
 ;; must be named "compiler.rkt"
 (define compiler-passes
   ;; ("partial evaluation" ,pe-Lvar ,interp-Lvar)
-  `(("uniquify" ,uniquify ,interp-Lvar)
-    ("remove complex opera*" ,remove-complex-opera* ,interp-Lvar ,type-check-Lvar)
-    ("explicate control" ,explicate-control ,interp-Cvar ,type-check-Cvar)
-    ("instruction selection" ,select-instructions ,interp-x86-0)
-    ("liveness analysis" ,uncover_live ,interp-x86-0)
-    ("build interference" ,build-interference ,interp-x86-0)
-    ("allocate registers" ,allocate-registers ,interp-x86-0)
-    ("patch instructions" ,patch-instructions ,interp-x86-0)
-    ("prelude-and-conclusion" ,prelude-and-conclusion ,interp-x86-0)))
+  `(
+    ("shrink" ,shrink ,interp-Lif ,type-check-Lif)
+    ("uniquify" ,uniquify ,interp-Lif ,type-check-Lif)
+    ("remove complex opera*" ,remove-complex-opera* ,interp-Lif ,type-check-Lif)
+    ("explicate control" ,explicate-control ,interp-Cif ,type-check-Cif)
+    ;; ("instruction selection" ,select-instructions ,interp-x86-0)
+    ;; ("liveness analysis" ,uncover_live ,interp-x86-0)
+    ;; ("build interference" ,build-interference ,interp-x86-0)
+    ;; ("allocate registers" ,allocate-registers ,interp-x86-0)
+    ;; ("patch instructions" ,patch-instructions ,interp-x86-0)
+    ;; ("prelude-and-conclusion" ,prelude-and-conclusion ,interp-x86-0)
+    ))
