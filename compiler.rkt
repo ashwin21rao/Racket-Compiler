@@ -176,7 +176,9 @@
 (define blocks (make-hash))
 
 (define (assign-label blck)
-  (let* ([label (gensym 'label)] [_ (dict-set! blocks label blck)] [lab (Goto label)]) lab))
+  (match blck
+    [(Goto label) (Goto label)]
+    [else (let* ([label (gensym 'label)] [_ (dict-set! blocks label blck)] [lab (Goto label)]) lab)]))
 
 ;; explicate-pred: Lif, e1, e2 -> C1 tail
 (define (explicate-pred pred e1 e2)
@@ -223,7 +225,8 @@
 ;; explicate-control : Lif -> C1
 (define (explicate-control p)
   (match p
-    [(Program info body) (CProgram info (let* ([a (dict-set! blocks 'start (explicate-tail body))]) blocks))]))
+    [(Program info body)
+     (CProgram info (let* ([_ (set! blocks (make-hash))] [a (dict-set! blocks 'start (explicate-tail body))]) blocks))]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -232,7 +235,19 @@
   (match atm
     [(Var x) (Var x)]
     [(Int x) (Imm x)]
+    [(Bool #t) (Imm 1)]
+    [(Bool #f) (Imm 0)]
     [else (error "Unhandled atom in select instructions" atm)]))
+
+(define (select-instructions-cmp op)
+  (match op
+    ['eq? 'e]
+    ['> 'g]
+    ['< 'l]
+    ['>= 'ge]
+    ['<= 'le]
+    )
+  )
 
 (define (select-instructions-exp p)
   (match p
@@ -252,7 +267,22 @@
     [(Assign x (Prim 'read '())) (let* ([instr1 (Callq 'read_int 0)]
                                         [instr2 (Instr 'movq (list (Reg 'rax) x))])
                                    (list instr1 instr2))]
+    [(Assign x (Prim 'not (list a1)))
+     (let* ([instr1 (Instr 'movq (list (select-instructions-atm a1) x))]
+            [instr2 (Instr 'xorq (list (Imm 1) x))])
+       (list instr1 instr2))]
+    [(Assign x (Prim cmp (list a1 a2)))
+     (let* ([instr1 (Instr 'cmpq (list (select-instructions-atm a2) (select-instructions-atm a1)))] ;; Args flipped in cmpq
+            [instr2 (Instr 'set (list (select-instructions-cmp cmp) (Reg 'al)))]
+            [instr3 (Instr 'mozbq (list (Reg 'al) x))])
+       (list instr1 instr2 instr3))]
+    [(Assign x (Goto label)) (list (Jmp label))]
     [(Assign x y) (let* ([instr1 (Instr 'movq (list (select-instructions-atm y) x))]) (list instr1))]
+    [(IfStmt (Prim cmp (list a1 a2)) (Goto l1) (Goto l2)) 
+     (let* ([instr1 (Instr 'cmpq (list (select-instructions-atm a2) (select-instructions-atm a1)))] ;; Args flipped in cmpq
+            [instr2 (JmpIf (select-instructions-cmp cmp) l1)]
+            [instr3 (Jmp l2)])
+       (list instr1 instr2 instr3))]
     [(Return e)
      (let * ([instrs (select-instructions-exp (Assign (Reg 'rax) e))] [instr2 (Jmp 'conclusion)])
        (append instrs (list instr2)))]))
@@ -264,7 +294,7 @@
 ;; select-instructions : C0 -> pseudo-x86
 (define (select-instructions p)
   (match p
-    [(CProgram info blocks) (X86Program info (map select-instructions-block blocks))]))
+    [(CProgram info blocks) (X86Program info (map select-instructions-block (hash->list blocks)))]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -472,6 +502,7 @@
 (define (find-handle-neigh handle neighbours)
   (or (member (Reg (get-var handle)) neighbours) (member (Var (get-var handle)) neighbours)))
 
+;; TODO change this maybe
 (define (update-saturation handle color)
   (let* ([var (get-var handle)]
          [saturation (get-sat handle)]
@@ -573,12 +604,11 @@
 ;; must be named "compiler.rkt"
 (define compiler-passes
   ;; ("partial evaluation" ,pe-Lvar ,interp-Lvar)
-  `(
-    ("shrink" ,shrink ,interp-Lif ,type-check-Lif)
+  `(("shrink" ,shrink ,interp-Lif ,type-check-Lif)
     ("uniquify" ,uniquify ,interp-Lif ,type-check-Lif)
     ("remove complex opera*" ,remove-complex-opera* ,interp-Lif ,type-check-Lif)
     ("explicate control" ,explicate-control ,interp-Cif ,type-check-Cif)
-    ;; ("instruction selection" ,select-instructions ,interp-x86-0)
+    ("instruction selection" ,select-instructions ,interp-x86-1)
     ;; ("liveness analysis" ,uncover_live ,interp-x86-0)
     ;; ("build interference" ,build-interference ,interp-x86-0)
     ;; ("allocate registers" ,allocate-registers ,interp-x86-0)
