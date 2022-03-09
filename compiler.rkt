@@ -14,6 +14,7 @@
 (require "utilities.rkt")
 (require "priority_queue.rkt")
 (require "heap.rkt")
+(require "multigraph.rkt")
 (provide (all-defined-out))
 (require racket/trace)
 ;; (require "type-check-Lvar.rkt")
@@ -225,8 +226,10 @@
 ;; explicate-control : Lif -> C1
 (define (explicate-control p)
   (match p
-    [(Program info body)
-     (CProgram info (let* ([_ (set! blocks (make-hash))] [a (dict-set! blocks 'start (explicate-tail body))]) blocks))]))
+    [(Program info body) (CProgram info
+                                   (let* ([_ (set! blocks (make-hash))]
+                                          [a (dict-set! blocks 'start (explicate-tail body))])
+                                     blocks))]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -245,9 +248,7 @@
     ['> 'g]
     ['< 'l]
     ['>= 'ge]
-    ['<= 'le]
-    )
-  )
+    ['<= 'le]))
 
 (define (select-instructions-exp p)
   (match p
@@ -272,14 +273,18 @@
             [instr2 (Instr 'xorq (list (Imm 1) x))])
        (list instr1 instr2))]
     [(Assign x (Prim cmp (list a1 a2)))
-     (let* ([instr1 (Instr 'cmpq (list (select-instructions-atm a2) (select-instructions-atm a1)))] ;; Args flipped in cmpq
+     (let* ([instr1 (Instr 'cmpq
+                           (list (select-instructions-atm a2)
+                                 (select-instructions-atm a1)))] ;; Args flipped in cmpq
             [instr2 (Instr 'set (list (select-instructions-cmp cmp) (Reg 'al)))]
             [instr3 (Instr 'mozbq (list (Reg 'al) x))])
        (list instr1 instr2 instr3))]
     [(Assign x (Goto label)) (list (Jmp label))]
     [(Assign x y) (let* ([instr1 (Instr 'movq (list (select-instructions-atm y) x))]) (list instr1))]
-    [(IfStmt (Prim cmp (list a1 a2)) (Goto l1) (Goto l2)) 
-     (let* ([instr1 (Instr 'cmpq (list (select-instructions-atm a2) (select-instructions-atm a1)))] ;; Args flipped in cmpq
+    [(IfStmt (Prim cmp (list a1 a2)) (Goto l1) (Goto l2))
+     (let* ([instr1 (Instr 'cmpq
+                           (list (select-instructions-atm a2)
+                                 (select-instructions-atm a1)))] ;; Args flipped in cmpq
             [instr2 (JmpIf (select-instructions-cmp cmp) l1)]
             [instr3 (Jmp l2)])
        (list instr1 instr2 instr3))]
@@ -386,6 +391,9 @@
         blocks))]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(define label->live (make-hash))
+
 (define (filter-var-reg lst)
   (list->set (filter (lambda (x) (or (Var? x) (Reg? x))) lst)))
 
@@ -419,15 +427,15 @@
     [else
      (let* ([instr (first instrs)]
             [prev_liveness (match instr
-                             [(Jmp label) (set (Reg 'rax) (Reg 'rsp))]
+                             [(Jmp label) (dict-ref label->live label)]
                              [else prev_liveness])]
             [locations_read (instr-location-read instr)]
             [locations_written (instr-location-written instr)]
             [new_liveness (set-union (set-subtract prev_liveness locations_written) locations_read)])
        (append (uncover-live-instrs (rest instrs) new_liveness) (list new_liveness)))]))
 
-(define (uncover-live-block blck)
-  (match blck
+(define (uncover-live-block blocks label)
+  (match (cons label (dict-ref blocks label))
     [(cons label (Block info instrs))
      (cons label
            (Block (dict-set info 'liveness (uncover-live-instrs (reverse instrs) (list (set))))
@@ -435,7 +443,27 @@
 
 (define (uncover_live p)
   (match p
-    [(X86Program info blocks) (X86Program info (map uncover-live-block blocks))]))
+    [(X86Program info blocks)
+     (let* ([CFG (multigraph (make-hash))]
+            [_ (for ([blck blocks])
+                 (let* ([label (car blck)]
+                        [instrs (Block-instr* (cdr blck))]
+                        [_ (for ([instr instrs])
+                             (match instr
+                               [(Jmp label_to) (add-directed-edge! CFG label label_to)]
+                               [(JmpIf cc label_to)
+                                (add-directed-edge! CFG label label_to)]
+                               [else 0]
+                               ))])
+                   0))]
+            [transposed-CFG (transpose CFG)]
+            [toposorted (tsort transposed-CFG)]
+            [info (dict-set* info 'tsorted toposorted 'CFG CFG)]
+            [_ (set! label->live (make-hash))]
+            [_ (dict-set! label->live 'conclusion (set (Reg 'rax) (Reg 'rsp)))]
+            [new_blocks (map (lambda (x) (uncover-live-block blocks x)) toposorted)]
+            )
+       (X86Program info blocks))]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -609,9 +637,9 @@
     ("remove complex opera*" ,remove-complex-opera* ,interp-Lif ,type-check-Lif)
     ("explicate control" ,explicate-control ,interp-Cif ,type-check-Cif)
     ("instruction selection" ,select-instructions ,interp-x86-1)
-    ;; ("liveness analysis" ,uncover_live ,interp-x86-0)
-    ;; ("build interference" ,build-interference ,interp-x86-0)
-    ;; ("allocate registers" ,allocate-registers ,interp-x86-0)
-    ;; ("patch instructions" ,patch-instructions ,interp-x86-0)
-    ;; ("prelude-and-conclusion" ,prelude-and-conclusion ,interp-x86-0)
+    ("liveness analysis" ,uncover_live ,interp-x86-1)
+    ;; ("build interference" ,build-interference ,interp-x86-1)
+    ;; ("allocate registers" ,allocate-registers ,interp-x86-1)
+    ;; ("patch instructions" ,patch-instructions ,interp-x86-1)
+    ;; ("prelude-and-conclusion" ,prelude-and-conclusion ,interp-x86-1)
     ))
