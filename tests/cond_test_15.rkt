@@ -1,0 +1,1 @@
+(if (eq? (read) (read)) (let ([x 1]) x) (let ([x (if (>= 1 1) (let ([x (> 5 5)]) (not x)) (let ([x (< 5 5)]) x))]) (+ (read) (if (<= 1 2) 1 (let ([x (> 5 5)]) (if (not (let ([x (> 5 5)]) (not (let ([x (> 5 5)]) (not x))))) 1 2))))))

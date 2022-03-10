@@ -138,7 +138,10 @@
     [(Var x) (cons (Var x) '())]
     [(Int x) (cons (Int x) '())]
     [(Bool x) (cons (Bool x) '())]
-    [(If cmp e1 e2) (If (rco-exp cmp) (rco-exp e1) (rco-exp e2))]
+    [(If cmp e1 e2) (let* ([new_sym (gensym 'temp)]
+                           [new_var (Var new_sym)]
+                           [list_1 (cons new_sym (If (rco-exp cmp) (rco-exp e1) (rco-exp e2)))])
+                      (cons new_var (list list_1)))]
     [(Let x e body) (let* ([new_sym (gensym 'temp)]
                            [new_var (Var new_sym)]
                            [list_1 (cons x (rco-exp e))]
@@ -186,6 +189,14 @@
   (match pred
     [(Bool #t) e1] ;; partial evaluation
     [(Bool #f) e2]
+    [(Var x) (let* ([l1 (assign-label e1)] [l2 (assign-label e2)])
+               (IfStmt (Prim 'eq? (list (Var x) (Bool #t)))
+                       l1
+                       l2))] ;; Variable inside if statement, convert to comparison
+    [(Prim 'not (list x)) (let* ([l1 (assign-label e1)] [l2 (assign-label e2)])
+               (IfStmt (Prim 'eq? (list x (Bool #f)))
+                       l1
+                       l2))] ;; Variable inside if statement, convert to comparison
     [(Prim cmp (list atm1 atm2)) (let * ([l1 (assign-label e1)] [l2 (assign-label e2)])
                                    (IfStmt (Prim cmp (list atm1 atm2)) l1 l2))]
     [(If cnd exp1 exp2) (let* ([l1 (assign-label e1)]
@@ -198,7 +209,7 @@
 
 ;; explicate-tail : Lif -> C1 tail
 (define (explicate-tail e)
-  (match e
+  (match e 
     [(Var x) (Return (Var x))]
     [(Int n) (Return (Int n))]
     [(Bool b) (Return (Bool b))]
@@ -277,10 +288,10 @@
                            (list (select-instructions-atm a2)
                                  (select-instructions-atm a1)))] ;; Args flipped in cmpq
             [instr2 (Instr 'set (list (select-instructions-cmp cmp) (Reg 'al)))]
-            [instr3 (Instr 'mozbq (list (Reg 'al) x))])
+            [instr3 (Instr 'movzbq (list (Reg 'al) x))])
        (list instr1 instr2 instr3))]
-    [(Assign x (Goto label)) (list (Jmp label))]
     [(Assign x y) (let* ([instr1 (Instr 'movq (list (select-instructions-atm y) x))]) (list instr1))]
+    [(Goto label) (list (Jmp label))]
     [(IfStmt (Prim cmp (list a1 a2)) (Goto l1) (Goto l2))
      (let* ([instr1 (Instr 'cmpq
                            (list (select-instructions-atm a2)
@@ -340,7 +351,17 @@
   (for/list ([inst inst_list])
     (match inst
       [(Instr op (list arg arg)) empty]
-      [(Instr op (list (Deref reg1 off1) (Deref reg2 off2)))
+      [(Instr 'movzbq (list arg1 (Deref reg1 off1))) ;; second argument of movzbq must be a register
+       (let* ([instr1 (Instr 'movq (list (Deref reg1 off1) (Reg 'rax)))]
+              [instr2 (Instr 'movzbq (list arg1 (Reg 'rax)))])
+         (list instr1 instr2))]
+      [(Instr 'cmpq (list arg1 (Imm x))) ;; second argument of cmpq must not be an immediate
+       (let* ([instr1 (Instr 'movq (list (Imm x) (Reg 'rax)))]
+              [instr2 (Instr 'cmpq (list arg1 (Reg 'rax)))])
+         (list instr1 instr2))]
+      [(Instr op
+              (list (Deref reg1 off1)
+                    (Deref reg2 off2))) ;; No two memory reference in one instruction
        (let* ([instr1 (Instr 'movq (list (Deref reg1 off1) (Reg 'rax)))]
               [instr2 (Instr op (list (Reg 'rax) (Deref reg2 off2)))])
          (list instr1 instr2))]
@@ -401,12 +422,13 @@
   (let* ([live_list (match instr
                       [(Instr 'movq (list arg1 arg2)) (list arg1)]
                       [(Instr 'movzbq (list arg1 arg2)) (list arg1)]
-                      [(Instr 'addq (list arg1 arg2)) (list arg1 arg2)]
-                      [(Instr 'subq (list arg1 arg2)) (list arg1 arg2)]
-                      [(Instr 'negq (list arg1)) (list arg1)]
-                      [(Instr 'xorq (list arg1)) (list arg1)]
-                      [(Instr 'cmpq es) es]
-                      [(Instr 'set (list cc arg)) (empty)] ;; Read from eflags
+                      [(Instr 'set (list cc arg)) empty] ;; Read from eflags
+                      [(Instr op args) args] ;; Read from eflags
+                      #| [(Instr 'addq atoms) atoms] |#
+                      #| [(Instr 'subq atoms) atoms] |#
+                      #| [(Instr 'negq (list arg1)) (list arg1)] |#
+                      #| [(Instr 'xorq (list arg1 arg2)) (list arg1 arg2)] |#
+                      #| [(Instr 'cmpq es) es] |#
                       [(Callq x y) (map Reg
                                         (take '(rdi rsi rdx rcx r8 r9)
                                               y))] ;; TODO what happens if more than 6 args
@@ -448,8 +470,8 @@
   (match (cons label (dict-ref blocks label))
     [(cons label (Block info instrs))
      (let* ([info (dict-set info 'liveness (uncover-live-instrs (reverse instrs) (list (set))))]
-             [_ (dict-set! label->live label (first (dict-ref info 'liveness)))])
-        (cons label (Block info instrs)))]))
+            [_ (dict-set! label->live label (first (dict-ref info 'liveness)))])
+       (cons label (Block info instrs)))]))
 
 (define (uncover_live p)
   (match p
@@ -478,13 +500,15 @@
 (define (get-interference-edges instr_k l_after)
   (let* ([var_written (match instr_k
                         [(Instr 'movq es) (filter-var-reg es)]
+                        [(Instr 'movzbq es) (filter-var-reg es)]
                         [else (instr-location-written instr_k)])]
-         [l_left (set-subtract l_after var_written)] ;; remove both d, s from l_after
+         [l_left (set-subtract l_after var_written)] ;; remove both d, s from l_after in case of movq
          [l_left_list (set->list l_left)]
          [var_written_list (set->list var_written)]
          [var_written_list
           (match instr_k
             [(Instr 'movq es) (list (last es))] ;; incase of movq only make edges from the dest
+            [(Instr 'movzbq es) (list (last es))] ;; incase of movzbq only make edges from the dest
             [else var_written_list])] ;; make edges from all the written variables
          [edges (cartesian-product var_written_list l_left_list)])
     edges))
@@ -495,7 +519,7 @@
 (define (get-liveness-from-block blck)
   (let* ([info (Block-info (cdr blck))]
          [liveness (dict-ref info 'liveness)]
-         [liveness (append (cdr liveness) (list (set)))])
+         [liveness (append (cdr liveness) (list (set)))]) ;; TODO confirm this
     liveness))
 
 (define (remove-liveness blck)
@@ -646,8 +670,7 @@
     ("explicate control" ,explicate-control ,interp-Cif ,type-check-Cif)
     ("instruction selection" ,select-instructions ,interp-x86-1)
     ("liveness analysis" ,uncover_live ,interp-x86-1)
-    ;; ("build interference" ,build-interference ,interp-x86-1)
-    ;; ("allocate registers" ,allocate-registers ,interp-x86-1)
-    ;; ("patch instructions" ,patch-instructions ,interp-x86-1)
-    ;; ("prelude-and-conclusion" ,prelude-and-conclusion ,interp-x86-1)
-    ))
+    ("build interference" ,build-interference ,interp-x86-1)
+    ("allocate registers" ,allocate-registers ,interp-x86-1)
+    ("patch instructions" ,patch-instructions ,interp-x86-1)
+    ("prelude-and-conclusion" ,prelude-and-conclusion ,interp-x86-1)))

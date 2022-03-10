@@ -5,9 +5,10 @@
 (require "interp-Lvar.rkt")
 (require "interp-Cvar.rkt")
 (require "interp-Lif.rkt")
+(require "type-check-Lif.rkt")
 (require "interp.rkt")
 (require "compiler.rkt")
-(debug-level 1)
+(debug-level 4)
 (AST-output-syntax 'concrete-syntax)
 
 ;; all the files in the tests/ directory with extension ".rkt".
@@ -25,12 +26,11 @@
           (string=? r (car (string-split p "_"))))
         all-tests)))
 
-(interp-tests "var" #f compiler-passes interp-Lvar "var_test" (tests-for "var"))
-(interp-tests "cond" #f compiler-passes interp-Lif "cond_test" (tests-for "cond"))
+;; (interp-tests "var" #f compiler-passes interp-Lvar "var_test" (tests-for "var"))
+(interp-tests "cond" type-check-Lif compiler-passes interp-Lif "cond_test" (tests-for "cond"))
 ;; (interp-tests "int" #f compiler-passes interp-Lvar "int_test" (tests-for "int"))
 
 ;; Uncomment the following when all the passes are complete to
 ;; test the final x86 code.
-;;(compiler-tests "var" #f compiler-passes "var_test" (tests-for "var"))
-;; (compiler-tests "int" #f compiler-passes "int_test" (tests-for "int"))
+(compiler-tests "cond" type-check-Lif compiler-passes "cond_test" (tests-for "cond"))
 
