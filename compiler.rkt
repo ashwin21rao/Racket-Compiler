@@ -400,23 +400,30 @@
 (define (instr-location-read instr)
   (let* ([live_list (match instr
                       [(Instr 'movq (list arg1 arg2)) (list arg1)]
+                      [(Instr 'movzbq (list arg1 arg2)) (list arg1)]
                       [(Instr 'addq (list arg1 arg2)) (list arg1 arg2)]
                       [(Instr 'subq (list arg1 arg2)) (list arg1 arg2)]
                       [(Instr 'negq (list arg1)) (list arg1)]
+                      [(Instr 'xorq (list arg1)) (list arg1)]
+                      [(Instr 'cmpq es) es]
+                      [(Instr 'set (list cc arg)) (empty)] ;; Read from eflags
                       [(Callq x y) (map Reg
                                         (take '(rdi rsi rdx rcx r8 r9)
                                               y))] ;; TODO what happens if more than 6 args
                       [(Jmp label) empty]
+                      [(JmpIf cc label) empty]
                       [else (error "Invalid instruction" instr)])]
          [filter_list (filter (lambda (x) (or (Var? x) (Reg? x))) live_list)])
     (list->set filter_list)))
 
 (define (instr-location-written instr)
   (let* ([live_list (match instr
+                      [(Instr 'cmpq es) empty]
+                      [(Instr 'set (list cc arg)) (list (Reg 'rax))] ;; Only using rax for now
                       [(Instr op es) (list (last es))]
-                      [(Callq x y)
-                       (map Reg '(rax rcx rdx rsi rdi r8 r9 r10 r11))] ;; make these actual registers
+                      [(Callq x y) (map Reg '(rax rcx rdx rsi rdi r8 r9 r10 r11))]
                       [(Jmp label) empty]
+                      [(JmpIf cc label) empty]
                       [else (error "Invalid instruction" instr)])]
          [filter_list (filter (lambda (x) (or (Var? x) (Reg? x))) live_list)])
     (list->set filter_list)))
@@ -428,6 +435,9 @@
      (let* ([instr (first instrs)]
             [prev_liveness (match instr
                              [(Jmp label) (dict-ref label->live label)]
+                             [(JmpIf cc label)
+                              (set-union (dict-ref label->live label)
+                                         prev_liveness)] ;; Take union with prev liveness
                              [else prev_liveness])]
             [locations_read (instr-location-read instr)]
             [locations_written (instr-location-written instr)]
@@ -437,9 +447,9 @@
 (define (uncover-live-block blocks label)
   (match (cons label (dict-ref blocks label))
     [(cons label (Block info instrs))
-     (cons label
-           (Block (dict-set info 'liveness (uncover-live-instrs (reverse instrs) (list (set))))
-                  instrs))]))
+     (let* ([info (dict-set info 'liveness (uncover-live-instrs (reverse instrs) (list (set))))]
+             [_ (dict-set! label->live label (first (dict-ref info 'liveness)))])
+        (cons label (Block info instrs)))]))
 
 (define (uncover_live p)
   (match p
@@ -451,19 +461,17 @@
                         [_ (for ([instr instrs])
                              (match instr
                                [(Jmp label_to) (add-directed-edge! CFG label label_to)]
-                               [(JmpIf cc label_to)
-                                (add-directed-edge! CFG label label_to)]
-                               [else 0]
-                               ))])
+                               [(JmpIf cc label_to) (add-directed-edge! CFG label label_to)]
+                               [else 0]))])
                    0))]
             [transposed-CFG (transpose CFG)]
-            [toposorted (tsort transposed-CFG)]
+            [toposorted
+             (rest (tsort transposed-CFG))] ;; ignore the first element of list which is 'conclusion
             [info (dict-set* info 'tsorted toposorted 'CFG CFG)]
             [_ (set! label->live (make-hash))]
             [_ (dict-set! label->live 'conclusion (set (Reg 'rax) (Reg 'rsp)))]
-            [new_blocks (map (lambda (x) (uncover-live-block blocks x)) toposorted)]
-            )
-       (X86Program info blocks))]))
+            [new_blocks (map (lambda (x) (uncover-live-block blocks x)) toposorted)])
+       (X86Program info new_blocks))]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
