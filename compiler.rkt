@@ -20,6 +20,7 @@
 ;; (require "type-check-Cvar.rkt")
 (require "type-check-Lif.rkt")
 (require "type-check-Cif.rkt")
+(require "type-check-Cwhile.rkt")
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Lint examples
@@ -622,7 +623,7 @@
                           (cons color (Deref 'rbp total_offset)))]))])
     cth))
 
-(define (allocate-register-instrs inst_list vtc cth)
+(trace-define (allocate-register-instrs inst_list vtc cth)
   (for/list ([inst inst_list])
     (match inst
       [(Instr op args)
@@ -667,7 +668,7 @@
   `(("shrink" ,shrink ,interp-Lif ,type-check-Lif)
     ("uniquify" ,uniquify ,interp-Lif ,type-check-Lif)
     ("remove complex opera*" ,remove-complex-opera* ,interp-Lif ,type-check-Lif)
-    ("explicate control" ,explicate-control ,interp-Cif ,type-check-Cif)
+    ("explicate control" ,explicate-control ,interp-Cif ,type-check-Cwhile)
     ("instruction selection" ,select-instructions ,interp-x86-1)
     ("liveness analysis" ,uncover_live ,interp-x86-1)
     ("build interference" ,build-interference ,interp-x86-1)
