@@ -13,7 +13,6 @@
 
 (require "utilities.rkt")
 (require "priority_queue.rkt")
-(require "heap.rkt")
 (require "multigraph.rkt")
 (provide (all-defined-out))
 (require racket/trace)
@@ -194,9 +193,9 @@
                        l1
                        l2))] ;; Variable inside if statement, convert to comparison
     [(Prim 'not (list x)) (let* ([l1 (assign-label e1)] [l2 (assign-label e2)])
-               (IfStmt (Prim 'eq? (list x (Bool #f)))
-                       l1
-                       l2))] ;; Variable inside if statement, convert to comparison
+                            (IfStmt (Prim 'eq? (list x (Bool #f)))
+                                    l1
+                                    l2))] ;; Variable inside if statement, convert to comparison
     [(Prim cmp (list atm1 atm2)) (let * ([l1 (assign-label e1)] [l2 (assign-label e2)])
                                    (IfStmt (Prim cmp (list atm1 atm2)) l1 l2))]
     [(If cnd exp1 exp2) (let* ([l1 (assign-label e1)]
@@ -209,7 +208,7 @@
 
 ;; explicate-tail : Lif -> C1 tail
 (define (explicate-tail e)
-  (match e 
+  (match e
     [(Var x) (Return (Var x))]
     [(Int n) (Return (Int n))]
     [(Bool b) (Return (Bool b))]
@@ -563,49 +562,48 @@
   (or (member (Reg (get-var handle)) neighbours) (member (Var (get-var handle)) neighbours)))
 
 ;; TODO change this maybe
-(define (update-saturation handle color)
+(define (update-saturation handle color pq)
   (let* ([var (get-var handle)]
          [saturation (get-sat handle)]
          [new_sat (set-union saturation (set color))])
-    (set-node-key! handle (cons var new_sat))))
+    (set-node-key! handle (cons var new_sat)) ;; update the saturation set in the node
+    (pqueue-decrease-key! pq handle))) ;; tell pq to change order
 
-(define (update-saturations graph handles var color)
+(define (update-saturations graph handles var color pq)
   (let* ([neighbours (sequence->list (in-neighbors graph var))]
          [neighbour-handles (filter (lambda (x) (find-handle-neigh x neighbours)) handles)]
-         [_ (map (lambda (x) (update-saturation x color)) neighbour-handles)])
+         [_ (map (lambda (x) (update-saturation x color pq)) neighbour-handles)])
     color))
 
 (define (get_greedy_color sat_popped num)
   (if (set-member? sat_popped num) (get_greedy_color sat_popped (+ num 1)) num))
 
-(define (not-while-loop n graph handles w)
+(define (not-while-loop n graph handles pq)
   (cond
     [(= n 0) '()]
-    [else (let* ([node_popped (pqueue-pop! w)]
+    [else (let* ([node_popped (pqueue-pop! pq)]
                  [var_popped (car node_popped)]
                  [sat_popped (cdr node_popped)]
                  [reqd_color (get_greedy_color sat_popped 0)]
                  [color_pair (cons (Var var_popped) reqd_color)]
                  [handles (filter (lambda (x) (not (equal? (car (node-key x)) var_popped)))
                                   handles)] ;; remove the popped element from handles
-                 [_ (update-saturations graph handles (Var var_popped) reqd_color)]
-                 [lst (append (list color_pair) (not-while-loop (- n 1) graph handles w))])
+                 [_ (update-saturations graph handles (Var var_popped) reqd_color pq)]
+                 [lst (append (list color_pair) (not-while-loop (- n 1) graph handles pq))])
             lst)]))
 
 (define (color_graph graph vars)
   (let* ([vertices (get-vertices graph)]
          [registers-used (filter (lambda (x) (Reg? x)) vertices)]
          [var_color '()]
-         [w (make-pqueue saturation-cmp)]
+         [pq (make-pqueue saturation-cmp)]
          [handles (for/list ([var vars])
-                    (pqueue-push! w (cons var (set))))]
-         [counter 0]
+                    (pqueue-push! pq (cons var (set))))]
          [_ (for ([e registers-used])
               (set! var_color (append var_color (list (cons e (register->color (Reg-name e))))))
-              (update-saturations graph handles e (register->color (Reg-name e)))
-              (set! counter (+ 1 counter)))]
-         [n (pqueue-count w)]
-         [vars (not-while-loop n graph handles w)]
+              (update-saturations graph handles e (register->color (Reg-name e)) pq))]
+         [n (pqueue-count pq)]
+         [vars (not-while-loop n graph handles pq)]
          [var_color (append var_color vars)])
     var_color))
 
