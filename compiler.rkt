@@ -350,7 +350,7 @@
 (define (fix-instructions inst_list)
   (for/list ([inst inst_list])
     (match inst
-      [(Instr op (list arg arg)) empty]
+      [(Instr 'movq (list arg arg)) empty] ;; remove all moves with some source and destination
       [(Instr 'movzbq (list arg1 (Deref reg1 off1))) ;; second argument of movzbq must be a register
        (let* ([instr1 (Instr 'movq (list (Deref reg1 off1) (Reg 'rax)))]
               [instr2 (Instr 'movzbq (list arg1 (Reg 'rax)))])
