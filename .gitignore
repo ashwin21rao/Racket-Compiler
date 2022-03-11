@@ -20,4 +20,5 @@ compiled/
 *.dep
 
 # Useless files
-out.txt
+out*.txt
+pq.rkt

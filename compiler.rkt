@@ -561,7 +561,6 @@
 (define (find-handle-neigh handle neighbours)
   (or (member (Reg (get-var handle)) neighbours) (member (Var (get-var handle)) neighbours)))
 
-;; TODO change this maybe
 (define (update-saturation handle color pq)
   (let* ([var (get-var handle)]
          [saturation (get-sat handle)]
@@ -570,10 +569,11 @@
     (pqueue-decrease-key! pq handle))) ;; tell pq to change order
 
 (define (update-saturations graph handles var color pq)
-  (let* ([neighbours (sequence->list (in-neighbors graph var))]
-         [neighbour-handles (filter (lambda (x) (find-handle-neigh x neighbours)) handles)]
-         [_ (map (lambda (x) (update-saturation x color pq)) neighbour-handles)])
-    color))
+  (define neighbours (sequence->list (in-neighbors graph var)))
+  (define var_neighbours (filter Var? neighbours)) ;; update only the saturation of variables
+  (for ([neighbour var_neighbours])
+    (define handle (dict-ref handles (Var-name neighbour) #f)) ;; check if the variable still exists in handles
+    (if handle (update-saturation handle color pq) 0)))
 
 (define (get_greedy_color sat_popped num)
   (if (set-member? sat_popped num) (get_greedy_color sat_popped (+ num 1)) num))
@@ -586,8 +586,7 @@
                  [sat_popped (cdr node_popped)]
                  [reqd_color (get_greedy_color sat_popped 0)]
                  [color_pair (cons (Var var_popped) reqd_color)]
-                 [handles (filter (lambda (x) (not (equal? (car (node-key x)) var_popped)))
-                                  handles)] ;; remove the popped element from handles
+                 [_ (dict-remove! handles var_popped)] ;; remove the popped element from handles
                  [_ (update-saturations graph handles (Var var_popped) reqd_color pq)]
                  [lst (append (list color_pair) (not-while-loop (- n 1) graph handles pq))])
             lst)]))
@@ -597,11 +596,14 @@
          [registers-used (filter (lambda (x) (Reg? x)) vertices)]
          [var_color '()]
          [pq (make-pqueue saturation-cmp)]
-         [handles (for/list ([var vars])
-                    (pqueue-push! pq (cons var (set))))]
-         [_ (for ([e registers-used])
-              (set! var_color (append var_color (list (cons e (register->color (Reg-name e))))))
-              (update-saturations graph handles e (register->color (Reg-name e)) pq))]
+         [handles (make-hash)]
+         [_ (for ([var vars]) ;; note var is a symbol not a variable
+                    (define handle (pqueue-push! pq (cons var (set))))
+                    (dict-set! handles var handle))]
+         [_ (for ([reg registers-used])
+              (define reg_name (Reg-name reg))
+              (set! var_color (append var_color (list (cons reg (register->color reg_name)))))
+              (update-saturations graph handles reg (register->color reg_name) pq))]
          [n (pqueue-count pq)]
          [vars (not-while-loop n graph handles pq)]
          [var_color (append var_color vars)])
