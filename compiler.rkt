@@ -176,7 +176,7 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 ;; return cons(atom, (list (cons variables exp)))
-(trace-define (rco-atom expr)
+(define (rco-atom expr)
   (begin
     (define new_sym (gensym 'temp))
     (define new_var (Var new_sym))
@@ -185,11 +185,10 @@
       [(Int x) (cons (Int x) '())]
       [(Bool x) (cons (Bool x) '())]
       [(Void) (cons (Void) '())]
-      [(GetBang x) (cons (Var x) '())]
+      [(GetBang x) (cons new_var (list (cons new_sym (Var x))))]
       [(WhileLoop cnd body)
        (cons new_var (list (cons new_sym (WhileLoop (rco-exp cnd) (rco-exp body)))))]
-      ;; [(Begin es body) (cons new_var (list (cons new_sym (Begin (map rco-exp es) (rco-exp body)))))]
-      [(Begin es body) (cons new_var (list (cons new_sym (Begin es body))))]
+      [(Begin es body) (cons new_var (list (cons new_sym (Begin (map rco-exp es) (rco-exp body)))))]
       [(SetBang x rhs) (cons new_var (list (cons new_sym (SetBang x (rco-exp rhs)))))]
       [(If cmp e1 e2) (let* ([new_sym (gensym 'temp)]
                              [new_var (Var new_sym)]
@@ -222,7 +221,7 @@
     [(Void) (Void)]
     [(Let x e body) (Let x (rco-exp e) (rco-exp body))]
     [(Prim op es) (gen-lets (cdr (rco-atom (Prim op es))))]
-    [(SetBang x rhs) (SetBang x (rco-exp e))]
+    [(SetBang x rhs) (SetBang x (rco-exp rhs))]
     [(GetBang x) (GetBang x)]
     [(WhileLoop cnd body) (WhileLoop (rco-exp cnd) (rco-exp body))]
     [(Begin es body) (Begin (map rco-exp es) (rco-exp body))]

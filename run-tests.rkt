@@ -26,7 +26,7 @@
 
 ;; (interp-tests "int" #f compiler-passes interp-Lvar "int_test" (tests-for "int"))
 ;; (interp-tests "var" #f compiler-passes interp-Lvar "var_test" (tests-for "var"))
-;; (interp-tests "cond" type-check-Lwhile compiler-passes interp-Lwhile "cond_test" (tests-for "cond"))
+(interp-tests "cond" type-check-Lwhile compiler-passes interp-Lwhile "cond_test" (tests-for "cond"))
 (interp-tests "while" type-check-Lwhile compiler-passes interp-Lwhile "while_test" (tests-for "while"))
 
 ;; Uncomment the following when all the passes are complete to
