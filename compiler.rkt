@@ -157,7 +157,9 @@
     [(Bool x) (Bool x)]
     [(Int x) (Int x)]
     [(Void) (Void)]
-    [(If e1 e2 e3) (If (uncover-get!-exp e1 set!-vars) (uncover-get!-exp e2 set!-vars) (uncover-get!-exp e3 set!-vars))]
+    [(If e1 e2 e3) (If (uncover-get!-exp e1 set!-vars)
+                       (uncover-get!-exp e2 set!-vars)
+                       (uncover-get!-exp e3 set!-vars))]
     [(Let x rhs body) (Let x (uncover-get!-exp rhs set!-vars) (uncover-get!-exp body set!-vars))]
     [(SetBang var rhs) (SetBang var (uncover-get!-exp rhs set!-vars))]
     [(WhileLoop cnd body) (WhileLoop (uncover-get!-exp cnd set!-vars)
@@ -174,28 +176,38 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 ;; return cons(atom, (list (cons variables exp)))
-(define (rco-atom expr)
-  (match expr
-    [(Var x) (cons (Var x) '())]
-    [(Int x) (cons (Int x) '())]
-    [(Bool x) (cons (Bool x) '())]
-    [(If cmp e1 e2) (let* ([new_sym (gensym 'temp)]
+(trace-define (rco-atom expr)
+  (begin
+    (define new_sym (gensym 'temp))
+    (define new_var (Var new_sym))
+    (match expr
+      [(Var x) (cons (Var x) '())]
+      [(Int x) (cons (Int x) '())]
+      [(Bool x) (cons (Bool x) '())]
+      [(Void) (cons (Void) '())]
+      [(GetBang x) (cons (Var x) '())]
+      [(WhileLoop cnd body)
+       (cons new_var (list (cons new_sym (WhileLoop (rco-exp cnd) (rco-exp body)))))]
+      ;; [(Begin es body) (cons new_var (list (cons new_sym (Begin (map rco-exp es) (rco-exp body)))))]
+      [(Begin es body) (cons new_var (list (cons new_sym (Begin es body))))]
+      [(SetBang x rhs) (cons new_var (list (cons new_sym (SetBang x (rco-exp rhs)))))]
+      [(If cmp e1 e2) (let* ([new_sym (gensym 'temp)]
+                             [new_var (Var new_sym)]
+                             [list_1 (cons new_sym (If (rco-exp cmp) (rco-exp e1) (rco-exp e2)))])
+                        (cons new_var (list list_1)))]
+      [(Let x e body) (let* ([new_sym (gensym 'temp)]
+                             [new_var (Var new_sym)]
+                             [list_1 (cons x (rco-exp e))]
+                             [list_2 (cons new_sym (rco-exp body))]
+                             [list_3 (append (list list_1) (list list_2))])
+                        (cons new_var list_3))]
+      [(Prim op es) (let* ([new_sym (gensym 'temp)]
                            [new_var (Var new_sym)]
-                           [list_1 (cons new_sym (If (rco-exp cmp) (rco-exp e1) (rco-exp e2)))])
-                      (cons new_var (list list_1)))]
-    [(Let x e body) (let* ([new_sym (gensym 'temp)]
-                           [new_var (Var new_sym)]
-                           [list_1 (cons x (rco-exp e))]
-                           [list_2 (cons new_sym (rco-exp body))]
-                           [list_3 (append (list list_1) (list list_2))])
-                      (cons new_var list_3))]
-    [(Prim op es) (let* ([new_sym (gensym 'temp)]
-                         [new_var (Var new_sym)]
-                         [pairs (map rco-atom es)]
-                         [atoms (map car pairs)]
-                         [vs (append (foldr append '() (map cdr pairs))
-                                     (list (cons new_sym (Prim op atoms))))])
-                    (cons new_var vs))]))
+                           [pairs (map rco-atom es)]
+                           [atoms (map car pairs)]
+                           [vs (append (foldr append '() (map cdr pairs))
+                                       (list (cons new_sym (Prim op atoms))))])
+                      (cons new_var vs))])))
 
 (define (gen-lets lst)
   (cond
@@ -207,8 +219,13 @@
     [(Var x) (Var x)]
     [(Int x) (Int x)]
     [(Bool b) (Bool b)]
+    [(Void) (Void)]
     [(Let x e body) (Let x (rco-exp e) (rco-exp body))]
     [(Prim op es) (gen-lets (cdr (rco-atom (Prim op es))))]
+    [(SetBang x rhs) (SetBang x (rco-exp e))]
+    [(GetBang x) (GetBang x)]
+    [(WhileLoop cnd body) (WhileLoop (rco-exp cnd) (rco-exp body))]
+    [(Begin es body) (Begin (map rco-exp es) (rco-exp body))]
     [(If cmp e1 e2) (If (rco-exp cmp) (rco-exp e1) (rco-exp e2))]))
 
 ;; remove-complex-opera* : R1 -> R1
@@ -685,15 +702,15 @@
     cth))
 
 (define (allocate-register-instrs inst_list vtc cth)
- (for/list ([inst inst_list])
-   (match inst
-     [(Instr op args)
-      (Instr op
-             (for/list ([arg args])
-               (match arg
-                 [(Var v) (let* ([color (dict-ref vtc (Var v))] [home (dict-ref cth color)]) home)]
-                 [else arg])))]
-     [else inst])))
+  (for/list ([inst inst_list])
+    (match inst
+      [(Instr op args)
+       (Instr op
+              (for/list ([arg args])
+                (match arg
+                  [(Var v) (let* ([color (dict-ref vtc (Var v))] [home (dict-ref cth color)]) home)]
+                  [else arg])))]
+      [else inst])))
 
 (define (allocate-register-block cur_block vtc cth)
   (match cur_block
@@ -729,7 +746,7 @@
   `(("shrink" ,shrink ,interp-Lwhile ,type-check-Lwhile)
     ("uniquify" ,uniquify ,interp-Lwhile ,type-check-Lwhile)
     ("uncover-get!" ,uncover-get! ,interp-Lwhile ,type-check-Lwhile)
-    ;; ("remove complex opera*" ,remove-complex-opera* ,interp-Lwhile ,type-check-Lwhile)
+    ("remove complex opera*" ,remove-complex-opera* ,interp-Lwhile ,type-check-Lwhile)
     ;; ("explicate control" ,explicate-control ,interp-Cif ,type-check-Cwhile)
     ;; ("instruction selection" ,select-instructions ,interp-x86-1)
     ;; ("liveness analysis" ,uncover_live ,interp-x86-1)
