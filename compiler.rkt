@@ -144,10 +144,11 @@
     [(Int n) (set)]
     [(Bool b) (set)]
     [(Void) (set)]
+    [(If e1 e2 e3) (set-union (collect-set! e1) (collect-set! e2) (collect-set! e3))]
     [(Let x rhs body) (set-union (collect-set! rhs) (collect-set! body))]
     [(SetBang var rhs) (set-union (set var) (collect-set! rhs))]
     [(WhileLoop cnd body) (set-union (collect-set! cnd) (collect-set! body))]
-    [(Prim op es) (apply set-union (map collect-set! es))]
+    [(Prim op es) (apply set-union (append (map collect-set! es) (list (set))))]
     [(Begin es body) (set-union (apply set-union (map collect-set! es)) (collect-set! body))]))
 
 (define (uncover-get!-exp e set!-vars)
@@ -156,6 +157,7 @@
     [(Bool x) (Bool x)]
     [(Int x) (Int x)]
     [(Void) (Void)]
+    [(If e1 e2 e3) (If (uncover-get!-exp e1 set!-vars) (uncover-get!-exp e2 set!-vars) (uncover-get!-exp e3 set!-vars))]
     [(Let x rhs body) (Let x (uncover-get!-exp rhs set!-vars) (uncover-get!-exp body set!-vars))]
     [(SetBang var rhs) (SetBang var (uncover-get!-exp rhs set!-vars))]
     [(WhileLoop cnd body) (WhileLoop (uncover-get!-exp cnd set!-vars)
@@ -300,21 +302,40 @@
     ['>= 'ge]
     ['<= 'le]))
 
+(define (select-instructions-add x a1 a2)
+  (cond
+    [(eq? x a1)
+     (let* ([instr1 (Instr 'addq (list (select-instructions-atm a2) (select-instructions-atm a1)))])
+       (list instr1))]
+    [(eq? x a2)
+     (let* ([instr1 (Instr 'addq (list (select-instructions-atm a1) (select-instructions-atm a2)))])
+       (list instr1))]
+    [else (let* ([instr1 (Instr 'movq (list (select-instructions-atm a1) x))]
+                 [instr2 (Instr 'addq (list (select-instructions-atm a2) x))])
+            (list instr1 instr2))]))
+
+(define (select-instructions-neg x a1)
+  (cond
+    [(eq? x a1) (let* ([instr1 (Instr 'negq (list (select-instructions-atm a1)))]) (list instr1))]
+    [else (let* ([instr1 (Instr 'movq (list (select-instructions-atm a1) x))]
+                 [instr2 (Instr 'negq (list x))])
+            (list instr1 instr2))]))
+
+(define (select-instructions-sub x a1 a2)
+  (cond
+    [(eq? x a1)
+     (let* ([instr1 (Instr 'subq (list (select-instructions-atm a2) (select-instructions-atm a1)))])
+       (list instr1))]
+    [else (let* ([instr1 (Instr 'movq (list (select-instructions-atm a1) x))]
+                 [instr2 (Instr 'subq (list (select-instructions-atm a2) x))])
+            (list instr1 instr2))]))
+
 (define (select-instructions-exp p)
   (match p
     [(Seq x y) (append (select-instructions-exp x) (select-instructions-exp y))]
-    [(Assign x (Prim '+ (list a1 a2)))
-     (let* ([instr1 (Instr 'movq (list (select-instructions-atm a1) x))]
-            [instr2 (Instr 'addq (list (select-instructions-atm a2) x))])
-       (list instr1 instr2))]
-    [(Assign x (Prim '- (list a1 a2)))
-     (let* ([instr1 (Instr 'movq (list (select-instructions-atm a1) x))]
-            [instr2 (Instr 'subq (list (select-instructions-atm a2) x))])
-       (list instr1 instr2))]
-    [(Assign x (Prim '- (list a1)))
-     (let* ([instr1 (Instr 'movq (list (select-instructions-atm a1) x))]
-            [instr2 (Instr 'negq (list x))])
-       (list instr1 instr2))]
+    [(Assign x (Prim '+ (list a1 a2))) (select-instructions-add x a1 a2)]
+    [(Assign x (Prim '- (list a1))) (select-instructions-neg x a1)]
+    [(Assign x (Prim '- (list a1 a2))) (select-instructions-sub x a1 a2)]
     [(Assign x (Prim 'read '())) (let* ([instr1 (Callq 'read_int 0)]
                                         [instr2 (Instr 'movq (list (Reg 'rax) x))])
                                    (list instr1 instr2))]
@@ -663,8 +684,7 @@
                           (cons color (Deref 'rbp total_offset)))]))])
     cth))
 
-(trace-define
- (allocate-register-instrs inst_list vtc cth)
+(define (allocate-register-instrs inst_list vtc cth)
  (for/list ([inst inst_list])
    (match inst
      [(Instr op args)
@@ -709,12 +729,12 @@
   `(("shrink" ,shrink ,interp-Lwhile ,type-check-Lwhile)
     ("uniquify" ,uniquify ,interp-Lwhile ,type-check-Lwhile)
     ("uncover-get!" ,uncover-get! ,interp-Lwhile ,type-check-Lwhile)
-    ;; ("remove complex opera*" ,remove-complex-opera* ,interp-Lwhile ,type-check-Lwhile) |#
-    ;; ("explicate control" ,explicate-control ,interp-Cif ,type-check-Cwhile) |#
-    ;; ("instruction selection" ,select-instructions ,interp-x86-1) |#
-    ;; ("liveness analysis" ,uncover_live ,interp-x86-1) |#
-    ;; ("build interference" ,build-interference ,interp-x86-1) |#
-    ;; ("allocate registers" ,allocate-registers ,interp-x86-1) |#
-    ;; ("patch instructions" ,patch-instructions ,interp-x86-1) |#
+    ;; ("remove complex opera*" ,remove-complex-opera* ,interp-Lwhile ,type-check-Lwhile)
+    ;; ("explicate control" ,explicate-control ,interp-Cif ,type-check-Cwhile)
+    ;; ("instruction selection" ,select-instructions ,interp-x86-1)
+    ;; ("liveness analysis" ,uncover_live ,interp-x86-1)
+    ;; ("build interference" ,build-interference ,interp-x86-1)
+    ;; ("allocate registers" ,allocate-registers ,interp-x86-1)
+    ;; ("patch instructions" ,patch-instructions ,interp-x86-1)
     ;; ("prelude-and-conclusion" ,prelude-and-conclusion ,interp-x86-1)
     ))

@@ -3,10 +3,8 @@
 
 (require "utilities.rkt")
 (require "interp-Lvar.rkt")
-(require "interp-Cvar.rkt")
 (require "interp-Lwhile.rkt")
 (require "type-check-Lwhile.rkt")
-(require "interp.rkt")
 (require "compiler.rkt")
 (debug-level 1)
 (AST-output-syntax 'concrete-syntax)
@@ -26,13 +24,13 @@
           (string=? r (car (string-split p "_"))))
         all-tests)))
 
-;; (interp-tests "var" #f compiler-passes interp-Lvar "var_test" (tests-for "var"))
-;; (interp-tests "cond" type-check-Lif compiler-passes interp-Lif "cond_test" (tests-for "cond"))
 ;; (interp-tests "int" #f compiler-passes interp-Lvar "int_test" (tests-for "int"))
+;; (interp-tests "var" #f compiler-passes interp-Lvar "var_test" (tests-for "var"))
+;; (interp-tests "cond" type-check-Lwhile compiler-passes interp-Lwhile "cond_test" (tests-for "cond"))
 (interp-tests "while" type-check-Lwhile compiler-passes interp-Lwhile "while_test" (tests-for "while"))
 
 ;; Uncomment the following when all the passes are complete to
 ;; test the final x86 code.
-;; (compiler-tests "cond" type-check-Lif compiler-passes "cond_test" (tests-for "cond"))
-;; (compiler-tests "var" type-check-Lif compiler-passes "var_test" (tests-for "var"))
+;; (compiler-tests "var" type-check-Lwhile compiler-passes "var_test" (tests-for "var"))
+;; (compiler-tests "cond" type-check-Lwhile compiler-passes "cond_test" (tests-for "cond"))
 
