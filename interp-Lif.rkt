@@ -22,7 +22,8 @@
         ['eq? (lambda (v1 v2)
                 (cond [(or (and (fixnum? v1) (fixnum? v2))
                            (and (boolean? v1) (boolean? v2))
-                           (and (vector? v1) (vector? v2)))
+                           (and (vector? v1) (vector? v2))
+                           (and (void? v1) (void? v2)))
                        (eq? v1 v2)]))]
         ['< (lambda (v1 v2)
               (cond [(and (fixnum? v1) (fixnum? v2))
