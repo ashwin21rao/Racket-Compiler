@@ -8,7 +8,7 @@
 ;; (require "interp-Lvar.rkt")
 ;; (require "interp-Cvar.rkt")
 (require "interp-Lwhile.rkt")
-(require "interp-Cif.rkt")
+(require "interp-Cwhile.rkt")
 (require "interp.rkt")
 
 (require "utilities.rkt")
@@ -222,7 +222,7 @@
     [(Let x e body) (Let x (rco-exp e) (rco-exp body))]
     [(Prim op es) (gen-lets (cdr (rco-atom (Prim op es))))]
     [(SetBang x rhs) (SetBang x (rco-exp rhs))]
-    [(GetBang x) (GetBang x)]
+    [(GetBang x) (Var x)]
     [(WhileLoop cnd body) (WhileLoop (rco-exp cnd) (rco-exp body))]
     [(Begin es body) (Begin (map rco-exp es) (rco-exp body))]
     [(If cmp e1 e2) (If (rco-exp cmp) (rco-exp e1) (rco-exp e2))]))
@@ -241,6 +241,10 @@
     [(Goto label) (Goto label)]
     [else (let* ([label (gensym 'label)] [_ (dict-set! blocks label blck)] [lab (Goto label)]) lab)]))
 
+(define (assign-block-to-label blck label_sym)
+  (begin
+    (dict-set! blocks label_sym blck)
+    (Goto label_sym)))
 
 ;; explicate-pred: Lwhile, e1, e2 -> C1 tail
 (define (explicate-pred pred e1 e2)
@@ -263,14 +267,30 @@
                                [B2 (explicate-pred exp2 l1 l2)])
                           (explicate-pred cnd B1 B2))]
     [(Let x rhs body) (let* ([body (explicate-pred body e1 e2)]) (explicate-assign rhs x body))]
+    [(Begin es body) (let* ([tail (explicate-pred body e1 e2)]) (foldr explicate-effect body es))]
     [else (error "explicate-pred unhandled case" pred)]))
 
-(define (explicate-effect e)
-    (match e
-        [(SetBang x rhs) (Assign x rhs)]
-        [(Prim 'read (list)) (Prim 'read (list))]
-      )
-  )
+(define (explicate-effect e cont)
+  (match e
+    [(Var x) cont]
+    [(Bool x) cont]
+    [(Int x) cont]
+    [(Void) cont]
+    [(Prim 'read (list)) (Seq (Prim 'read (list)) cont)]
+    [(Prim op es) cont]
+    [(SetBang x rhs) (explicate-assign rhs x cont)]
+    [(Let x rhs body) (let* ([body (explicate-effect body cont)]) (explicate-assign rhs x body))]
+    [(If cnd e1 e2) (let* ([l1 (assign-label cont)]
+                           [tail1 (explicate-effect e1 l1)]
+                           [tail2 (explicate-effect e2 l1)])
+                      (explicate-pred cnd tail1 tail2))]
+    [(Begin es body) (foldr explicate-effect cont (append es (list body)))]
+    [(WhileLoop cnd body) (let* ([loop_sym (gensym 'loop)]
+                                 [goto_loop (Goto loop_sym)]
+                                 [body (explicate-effect body goto_loop)]
+                                 [loop (explicate-pred cnd body cont)]
+                                 [_ (assign-block-to-label loop loop_sym)])
+                            goto_loop)]))
 
 ;; explicate-tail : Lwhile -> C1 tail
 (define (explicate-tail e)
@@ -279,10 +299,12 @@
     [(Int n) (Return (Int n))]
     [(Bool b) (Return (Bool b))]
     [(Prim op es) (Return (Prim op es))]
-    [(Begin es body) (let* ([tails (map explicate-effect es)]) )]
+    [(Begin es body) (let* ([tail (explicate-tail body)] [seq (foldr explicate-effect tail es)]) seq)]
     [(Let x rhs body) (let* ([tail (explicate-tail body)] [nt (explicate-assign rhs x tail)]) nt)]
     [(If cnd e1 e2) (let* ([tail1 (explicate-tail e1)] [tail2 (explicate-tail e2)])
                       (explicate-pred cnd tail1 tail2))]
+    ;; [(SetBang x rhs) (Return (Void))]
+    ;; [(WhileLoop cnd body) (Return (Void))]
     [else (error "explicate-tail unhandled case" e)]))
 
 ;; explicate_assign : Lwhile, Var x, C1 tail -> C1 tail
@@ -298,6 +320,15 @@
                       (explicate-pred cnd tail1 tail2))]
     [(Let y rhs body)
      (let* ([tail (explicate-assign body x cont)] [nt (explicate-assign rhs y tail)]) nt)]
+    [(Begin es body)
+     (let* ([tail (explicate-assign body x cont)] [seq (foldr explicate-effect tail es)]) seq)]
+    [(WhileLoop cnd body) (let* ([loop_sym (gensym 'loop)]
+                                 [goto_loop (Goto loop_sym)]
+                                 [body (explicate-effect body goto_loop)]
+                                 [loop (explicate-pred cnd body cont)]
+                                 [_ (assign-block-to-label loop loop_sym)])
+                            (Seq (Assign (Var x) (Void)) goto_loop))]
+    [(SetBang y rhs) (Seq (Assign (Var x) (Void)) (explicate-assign rhs y cont))]
     [else (error "explicate-assign unhandled case" e)]))
 
 ;; explicate-control : Lwhile -> C1
@@ -755,7 +786,7 @@
     ("uniquify" ,uniquify ,interp-Lwhile ,type-check-Lwhile)
     ("uncover-get!" ,uncover-get! ,interp-Lwhile ,type-check-Lwhile)
     ("remove complex opera*" ,remove-complex-opera* ,interp-Lwhile ,type-check-Lwhile)
-    ;; ("explicate control" ,explicate-control ,interp-Cif ,type-check-Cwhile)
+    ("explicate control" ,explicate-control ,interp-Cwhile ,type-check-Cwhile)
     ;; ("instruction selection" ,select-instructions ,interp-x86-1)
     ;; ("liveness analysis" ,uncover_live ,interp-x86-1)
     ;; ("build interference" ,build-interference ,interp-x86-1)
