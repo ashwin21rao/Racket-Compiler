@@ -149,7 +149,7 @@
     [(SetBang var rhs) (set-union (set var) (collect-set! rhs))]
     [(WhileLoop cnd body) (set-union (collect-set! cnd) (collect-set! body))]
     [(Prim op es) (apply set-union (append (map collect-set! es) (list (set))))]
-    [(Begin es body) (set-union (apply set-union (map collect-set! es)) (collect-set! body))]))
+    [(Begin es body) (set-union (apply set-union (append (map collect-set! es) (list (set)))) (collect-set! body))]))
 
 (define (uncover-get!-exp e set!-vars)
   (match e
@@ -348,6 +348,7 @@
     [(Int x) (Imm x)]
     [(Bool #t) (Imm 1)]
     [(Bool #f) (Imm 0)]
+    [(Void) (Imm 0)]
     [else (error "Unhandled atom in select instructions" atm)]))
 
 (define (select-instructions-cmp op)
@@ -392,6 +393,7 @@
     [(Assign x (Prim '+ (list a1 a2))) (select-instructions-add x a1 a2)]
     [(Assign x (Prim '- (list a1))) (select-instructions-neg x a1)]
     [(Assign x (Prim '- (list a1 a2))) (select-instructions-sub x a1 a2)]
+    [(Prim 'read '()) (list (Callq 'read_int 0))]
     [(Assign x (Prim 'read '())) (let* ([instr1 (Callq 'read_int 0)]
                                         [instr2 (Instr 'movq (list (Reg 'rax) x))])
                                    (list instr1 instr2))]
@@ -787,7 +789,7 @@
     ("uncover-get!" ,uncover-get! ,interp-Lwhile ,type-check-Lwhile)
     ("remove complex opera*" ,remove-complex-opera* ,interp-Lwhile ,type-check-Lwhile)
     ("explicate control" ,explicate-control ,interp-Cwhile ,type-check-Cwhile)
-    ;; ("instruction selection" ,select-instructions ,interp-x86-1)
+    ("instruction selection" ,select-instructions ,interp-x86-1)
     ;; ("liveness analysis" ,uncover_live ,interp-x86-1)
     ;; ("build interference" ,build-interference ,interp-x86-1)
     ;; ("allocate registers" ,allocate-registers ,interp-x86-1)

@@ -1,0 +1,5 @@
+(begin 
+    (read)
+    (read)
+    (read)
+  )
