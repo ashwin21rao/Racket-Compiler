@@ -3,6 +3,7 @@
          racket/stream)
 (require racket/dict)
 (require racket/fixnum)
+(require data/queue)
 (require graph)
 ;; (require "interp-Lint.rkt")
 ;; (require "interp-Lvar.rkt")
@@ -149,7 +150,8 @@
     [(SetBang var rhs) (set-union (set var) (collect-set! rhs))]
     [(WhileLoop cnd body) (set-union (collect-set! cnd) (collect-set! body))]
     [(Prim op es) (apply set-union (append (map collect-set! es) (list (set))))]
-    [(Begin es body) (set-union (apply set-union (append (map collect-set! es) (list (set)))) (collect-set! body))]))
+    [(Begin es body) (set-union (apply set-union (append (map collect-set! es) (list (set))))
+                                (collect-set! body))]))
 
 (define (uncover-get!-exp e set!-vars)
   (match e
@@ -531,7 +533,7 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(define label->live (make-hash))
+(define global-blocks (make-hash))
 
 (define (filter-var-reg lst)
   (list->set (filter (lambda (x) (or (Var? x) (Reg? x))) lst)))
@@ -542,11 +544,6 @@
                       [(Instr 'movzbq (list arg1 arg2)) (list arg1)]
                       [(Instr 'set (list cc arg)) empty] ;; Read from eflags
                       [(Instr op args) args] ;; Read from eflags
-                      #| [(Instr 'addq atoms) atoms] |#
-                      #| [(Instr 'subq atoms) atoms] |#
-                      #| [(Instr 'negq (list arg1)) (list arg1)] |#
-                      #| [(Instr 'xorq (list arg1 arg2)) (list arg1 arg2)] |#
-                      #| [(Instr 'cmpq es) es] |#
                       [(Callq x y) (map Reg
                                         (take '(rdi rsi rdx rcx r8 r9)
                                               y))] ;; TODO what happens if more than 6 args
@@ -569,33 +566,71 @@
     (list->set filter_list)))
 
 (define (uncover-live-instrs instrs prev_liveness)
-  (match instrs
-    [(list) empty]
-    [else
-     (let* ([instr (first instrs)]
-            [prev_liveness (match instr
-                             [(Jmp label) (dict-ref label->live label)]
-                             [(JmpIf cc label)
-                              (set-union (dict-ref label->live label)
-                                         prev_liveness)] ;; Take union with prev liveness
-                             [else prev_liveness])]
-            [locations_read (instr-location-read instr)]
-            [locations_written (instr-location-written instr)]
-            [new_liveness (set-union (set-subtract prev_liveness locations_written) locations_read)])
-       (append (uncover-live-instrs (rest instrs) new_liveness) (list new_liveness)))]))
+  (define reverse-instrs (reverse instrs))
+  (define liveness
+    (for/list ([instr reverse-instrs])
+      (define locations_read (instr-location-read instr))
+      (define locations_written (instr-location-written instr))
+      (define new_liveness (set-union (set-subtract prev_liveness locations_written) locations_read))
+      (set! prev_liveness new_liveness)
+      new_liveness))
+  (reverse liveness))
 
-(define (uncover-live-block blocks label)
-  (match (cons label (dict-ref blocks label))
-    [(cons label (Block info instrs))
-     (let* ([info (dict-set info 'liveness (uncover-live-instrs (reverse instrs) (list (set))))]
-            [_ (dict-set! label->live label (first (dict-ref info 'liveness)))])
-       (cons label (Block info instrs)))]))
+(define (analyze_dataflow G transfer bottom join)
+  ;; make an empty map
+  (define mapping (make-hash))
+
+  ;; empty hash of each label is empty set
+  (for ([v (in-vertices G)])
+    (dict-set! mapping v bottom))
+
+  ;; fill the queue with labels
+  (define worklist (make-queue))
+  (for ([v (in-vertices G)])
+    (enqueue! worklist v))
+
+  (define trans-G (transpose G))
+
+  (while (not (queue-empty? worklist))
+         ;; get top label from queue
+         (define node (dequeue! worklist))
+         (printf "~a\n" node)
+         ;; do set union over all the mappings of neighbours of node
+         (define input
+           (for/fold ([state bottom]) ([pred (in-neighbors trans-G node)])
+             (join state (dict-ref mapping pred))))
+         (printf "~a\n" node)
+         ;; get output of the node using transfer function
+         (define output (transfer node input))
+         (display output)
+         (display (dict-ref mapping node))
+         (cond
+           [(not (equal? output (dict-ref mapping node)))
+            (dict-set! mapping node output)
+            (for ([v (in-neighbors G node)])
+              (enqueue! worklist v))]))
+  mapping)
+
+(define (transfer! blck_label live_after_set)
+  (match blck_label
+    ['conclusion (set (Reg 'rax) (Reg 'rsp))]
+    [else
+     (define blck (dict-ref global-blocks blck_label))
+     (define instrs (Block-instr* blck))
+     (define info (Block-info blck))
+     (define liveness (uncover-live-instrs instrs live_after_set))
+     (define info_new (dict-set info 'liveness liveness))
+     (define new_block (Block info_new instrs))
+     (dict-set! global-blocks blck_label new_block)
+     (first liveness)]))
 
 (define (uncover_live p)
+  (set! global-blocks (make-hash))
   (match p
     [(X86Program info blocks)
      (let* ([CFG (multigraph (make-hash))]
             [_ (for ([blck blocks])
+                 (dict-set! global-blocks (car blck) (cdr blck))
                  (let* ([label (car blck)]
                         [instrs (Block-instr* (cdr blck))]
                         [_ (for ([instr instrs])
@@ -605,13 +640,8 @@
                                [else 0]))])
                    0))]
             [transposed-CFG (transpose CFG)]
-            [toposorted
-             (rest (tsort transposed-CFG))] ;; ignore the first element of list which is 'conclusion
-            [info (dict-set* info 'tsorted toposorted 'CFG CFG)]
-            [_ (set! label->live (make-hash))]
-            [_ (dict-set! label->live 'conclusion (set (Reg 'rax) (Reg 'rsp)))]
-            [new_blocks (map (lambda (x) (uncover-live-block blocks x)) toposorted)])
-       (X86Program info new_blocks))]))
+            [_ (analyze_dataflow transposed-CFG transfer! (set) set-union)])
+       (X86Program info (hash->list global-blocks)))]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -790,9 +820,9 @@
     ("remove complex opera*" ,remove-complex-opera* ,interp-Lwhile ,type-check-Lwhile)
     ("explicate control" ,explicate-control ,interp-Cwhile ,type-check-Cwhile)
     ("instruction selection" ,select-instructions ,interp-x86-1)
-    ;; ("liveness analysis" ,uncover_live ,interp-x86-1)
-    ;; ("build interference" ,build-interference ,interp-x86-1)
-    ;; ("allocate registers" ,allocate-registers ,interp-x86-1)
-    ;; ("patch instructions" ,patch-instructions ,interp-x86-1)
-    ;; ("prelude-and-conclusion" ,prelude-and-conclusion ,interp-x86-1)
+    ("liveness analysis" ,uncover_live ,interp-x86-1)
+    ("build interference" ,build-interference ,interp-x86-1)
+    ("allocate registers" ,allocate-registers ,interp-x86-1)
+    ("patch instructions" ,patch-instructions ,interp-x86-1)
+    ("prelude-and-conclusion" ,prelude-and-conclusion ,interp-x86-1)
     ))
