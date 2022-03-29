@@ -190,7 +190,7 @@
        (cons new_var (list (cons new_sym (WhileLoop (rco-exp cnd) (rco-exp body)))))]
       [(Begin es body) (cons new_var (list (cons new_sym (Begin (map rco-exp es) (rco-exp body)))))]
       [(SetBang x rhs) (cons new_var (list (cons new_sym (SetBang x (rco-exp rhs)))))]
-      [(If cmp e1 e2) (let* ([new_sym (gensym 'temp)]
+      [(If cmp e1 e2) (let* ([new_sym (gensym 'temp)] ;; refactor this
                              [new_var (Var new_sym)]
                              [list_1 (cons new_sym (If (rco-exp cmp) (rco-exp e1) (rco-exp e2)))])
                         (cons new_var (list list_1)))]
@@ -241,6 +241,7 @@
     [(Goto label) (Goto label)]
     [else (let* ([label (gensym 'label)] [_ (dict-set! blocks label blck)] [lab (Goto label)]) lab)]))
 
+
 ;; explicate-pred: Lwhile, e1, e2 -> C1 tail
 (define (explicate-pred pred e1 e2)
   (match pred
@@ -264,6 +265,13 @@
     [(Let x rhs body) (let* ([body (explicate-pred body e1 e2)]) (explicate-assign rhs x body))]
     [else (error "explicate-pred unhandled case" pred)]))
 
+(define (explicate-effect e)
+    (match e
+        [(SetBang x rhs) (Assign x rhs)]
+        [(Prim 'read (list)) (Prim 'read (list))]
+      )
+  )
+
 ;; explicate-tail : Lwhile -> C1 tail
 (define (explicate-tail e)
   (match e
@@ -271,6 +279,7 @@
     [(Int n) (Return (Int n))]
     [(Bool b) (Return (Bool b))]
     [(Prim op es) (Return (Prim op es))]
+    [(Begin es body) (let* ([tails (map explicate-effect es)]) )]
     [(Let x rhs body) (let* ([tail (explicate-tail body)] [nt (explicate-assign rhs x tail)]) nt)]
     [(If cnd e1 e2) (let* ([tail1 (explicate-tail e1)] [tail2 (explicate-tail e2)])
                       (explicate-pred cnd tail1 tail2))]
