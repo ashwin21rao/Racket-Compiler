@@ -5,6 +5,7 @@
 (require racket/fixnum)
 (require data/queue)
 (require graph)
+(require "interp-Lvec-prime.rkt")
 (require "interp-Lvec.rkt")
 (require "interp-Cvec.rkt")
 (require "interp.rkt")
@@ -135,11 +136,38 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (define (expose-allocation p)
-    (match p
-        [(Program info e) (Program info (expose-allocation e))]
-
-      )
-  )
+  (match p
+    [(HasType exp type) (begin
+                          (define exps (Prim-arg* exp))
+                          (define new_exps (map expose-allocation exps))
+                          (define n (length exps))
+                          (define array_size (* 8 (+ 1 n)))
+                          (define arg1 (Prim '+ (list (GlobalValue 'free_ptr) (Int array_size))))
+                          (define arg2 (GlobalValue 'fromspace_end))
+                          (define if_cond (If (Prim '< (list arg1 arg2)) (Void) (Collect (Int array_size))))
+                          (define vec-sym (gensym 'v))
+                          (define allocate (Allocate n type))
+                          (define cnt 0)
+                          (define initialize_eles
+                            (begin
+                              (for/list ([an_exp new_exps])
+                                (define ele (Prim 'vector-set! (list (Var vec-sym) (Int cnt) an_exp)))
+                                (set! cnt (+ 1 cnt))
+                                ele)))
+                          (define vector-declaration (Let vec-sym allocate (Begin initialize_eles (Var vec-sym))))
+                          (Begin (list if_cond) vector-declaration))]
+    [(Var x) (Var x)]
+    [(Bool b) (Bool b)]
+    [(Void) (Void)]
+    [(Int n) (Int n)]
+    [(If e1 e2 e3) (If (expose-allocation e1) (expose-allocation e2) (expose-allocation e3))]
+    [(Let x e body) (Let x (expose-allocation e) (expose-allocation body))]
+    [(Begin es body) (Begin (map expose-allocation es) (expose-allocation body))]
+    [(SetBang var_sym rhs) (SetBang var_sym (expose-allocation rhs))]
+    [(Prim op es) (Prim op (map expose-allocation es))]
+    [(WhileLoop cnd body) (WhileLoop (expose-allocation cnd) (expose-allocation body))]
+    [(Program info e) (Program info (expose-allocation e))]
+    ))
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (define (collect-set! e)
@@ -817,10 +845,9 @@
 ;; must be named "compiler.rkt"
 (define compiler-passes
   ;; ("partial evaluation" ,pe-Lvar ,interp-Lvar)
-  `(
-    ("shrink" ,shrink ,interp-Lvec,type-check-Lvec)
+  `(("shrink" ,shrink ,interp-Lvec ,type-check-Lvec)
     ("uniquify" ,uniquify ,interp-Lvec ,type-check-Lvec)
-    ("expose_allocation", expose-allocation, interp-Lvec, type-check-Lvec)
+    ("expose_allocation" ,expose-allocation ,interp-Lvec-prime ,type-check-Lvec)
     ;; ("uncover-get!" ,uncover-get! ,interp-Lvec ,type-check-Lvec)
     ;; ("remove complex opera*" ,remove-complex-opera* ,interp-Lvec ,type-check-Lvec)
     ;; ("explicate control" ,explicate-control ,interp-Cvec ,type-check-Cvec)
