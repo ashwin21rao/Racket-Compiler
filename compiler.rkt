@@ -5,11 +5,8 @@
 (require racket/fixnum)
 (require data/queue)
 (require graph)
-;; (require "interp-Lint.rkt")
-;; (require "interp-Lvar.rkt")
-;; (require "interp-Cvar.rkt")
-(require "interp-Lwhile.rkt")
-(require "interp-Cwhile.rkt")
+(require "interp-Lvec.rkt")
+(require "interp-Cvec.rkt")
 (require "interp.rkt")
 
 (require "utilities.rkt")
@@ -17,11 +14,8 @@
 (require "multigraph.rkt")
 (provide (all-defined-out))
 (require racket/trace)
-;; (require "type-check-Lvar.rkt")
-;; (require "type-check-Cvar.rkt")
-(require "type-check-Lwhile.rkt")
-(require "type-check-Cif.rkt")
-(require "type-check-Cwhile.rkt")
+(require "type-check-Lvec.rkt")
+(require "type-check-Cvec.rkt")
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Lint examples
@@ -97,7 +91,7 @@
     [(Program info e) (Program info (pe-exp e))]))
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-;; shrink Lwhile -> Lwhile
+;; shrink Lvec -> Lvec
 (define (shrink p)
   (match p
     [(Program info e) (Program info (shrink e))]
@@ -113,6 +107,7 @@
     [(Begin es body) (Begin (map shrink es) (shrink body))]
     [(SetBang var rhs) (SetBang var (shrink rhs))]
     [(WhileLoop cnd body) (WhileLoop (shrink cnd) (shrink body))]
+    [(HasType exp type) (HasType (shrink exp) type)]
     [else (error "Shrink unhandled case" p)]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -130,6 +125,7 @@
       [(Begin es body) (Begin (map (uniquify-exp env) es) ((uniquify-exp env) body))]
       [(SetBang var_sym rhs) (SetBang (dict-ref env var_sym) ((uniquify-exp env) rhs))]
       [(WhileLoop cnd body) (WhileLoop ((uniquify-exp env) cnd) ((uniquify-exp env) body))]
+      [(HasType exp type) (HasType ((uniquify-exp env) exp) type)]
       [(Prim op es) (Prim op (map (uniquify-exp env) es))])))
 
 ;; uniquify : R1 -> R1
@@ -137,6 +133,13 @@
   (match p
     [(Program info e) (Program info ((uniquify-exp '()) e))]))
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(define (expose-allocation p)
+    (match p
+        [(Program info e) (Program info (expose-allocation e))]
+
+      )
+  )
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (define (collect-set! e)
@@ -814,15 +817,17 @@
 ;; must be named "compiler.rkt"
 (define compiler-passes
   ;; ("partial evaluation" ,pe-Lvar ,interp-Lvar)
-  `(("shrink" ,shrink ,interp-Lwhile ,type-check-Lwhile)
-    ("uniquify" ,uniquify ,interp-Lwhile ,type-check-Lwhile)
-    ("uncover-get!" ,uncover-get! ,interp-Lwhile ,type-check-Lwhile)
-    ("remove complex opera*" ,remove-complex-opera* ,interp-Lwhile ,type-check-Lwhile)
-    ("explicate control" ,explicate-control ,interp-Cwhile ,type-check-Cwhile)
-    ("instruction selection" ,select-instructions ,interp-x86-1)
-    ("liveness analysis" ,uncover_live ,interp-x86-1)
-    ("build interference" ,build-interference ,interp-x86-1)
-    ("allocate registers" ,allocate-registers ,interp-x86-1)
-    ("patch instructions" ,patch-instructions ,interp-x86-1)
-    ("prelude-and-conclusion" ,prelude-and-conclusion ,interp-x86-1)
+  `(
+    ("shrink" ,shrink ,interp-Lvec,type-check-Lvec)
+    ("uniquify" ,uniquify ,interp-Lvec ,type-check-Lvec)
+    ("expose_allocation", expose-allocation, interp-Lvec, type-check-Lvec)
+    ;; ("uncover-get!" ,uncover-get! ,interp-Lvec ,type-check-Lvec)
+    ;; ("remove complex opera*" ,remove-complex-opera* ,interp-Lvec ,type-check-Lvec)
+    ;; ("explicate control" ,explicate-control ,interp-Cvec ,type-check-Cvec)
+    ;; ("instruction selection" ,select-instructions ,interp-x86-1)
+    ;; ("liveness analysis" ,uncover_live ,interp-x86-1)
+    ;; ("build interference" ,build-interference ,interp-x86-1)
+    ;; ("allocate registers" ,allocate-registers ,interp-x86-1)
+    ;; ("patch instructions" ,patch-instructions ,interp-x86-1)
+    ;; ("prelude-and-conclusion" ,prelude-and-conclusion ,interp-x86-1)
     ))
