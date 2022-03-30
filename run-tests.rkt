@@ -2,12 +2,13 @@
 #lang racket
 
 (require "utilities.rkt")
-(require "interp-Lvar.rkt")
 (require "interp-Lwhile.rkt")
+(require "interp-Lvec.rkt")
 (require "type-check-Lwhile.rkt")
+(require "type-check-Lvec.rkt")
 (require "compiler.rkt")
 (debug-level 1)
-(AST-output-syntax 'concrete-syntax)
+;; (AST-output-syntax 'concrete-syntax)
 
 ;; all the files in the tests/ directory with extension ".rkt".
 (define all-tests
@@ -28,10 +29,11 @@
 ;; (interp-tests "var" #f compiler-passes interp-Lvar "var_test" (tests-for "var"))
 ;; (interp-tests "cond" type-check-Lwhile compiler-passes interp-Lwhile "cond_test" (tests-for "cond"))
 (interp-tests "while" type-check-Lwhile compiler-passes interp-Lwhile "while_test" (tests-for "while"))
+(interp-tests "vectors" type-check-Lvec compiler-passes interp-Lvec "vectors_test" (tests-for "vectors"))
 
 ;; Uncomment the following when all the passes are complete to
 ;; test the final x86 code.
 ;; (compiler-tests "var" type-check-Lwhile compiler-passes "var_test" (tests-for "var"))
 ;; (compiler-tests "cond" type-check-Lwhile compiler-passes "cond_test" (tests-for "cond"))
-(compiler-tests "while" type-check-Lwhile compiler-passes "while_test" (tests-for "while"))
+;; (compiler-tests "while" type-check-Lwhile compiler-passes "while_test" (tests-for "while"))
 
