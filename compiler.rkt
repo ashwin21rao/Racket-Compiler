@@ -137,25 +137,26 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (define (expose-allocation p)
   (match p
-    [(HasType exp type) (begin
-                          (define exps (Prim-arg* exp))
-                          (define new_exps (map expose-allocation exps))
-                          (define n (length exps))
-                          (define array_size (* 8 (+ 1 n)))
-                          (define arg1 (Prim '+ (list (GlobalValue 'free_ptr) (Int array_size))))
-                          (define arg2 (GlobalValue 'fromspace_end))
-                          (define if_cond (If (Prim '< (list arg1 arg2)) (Void) (Collect (Int array_size))))
-                          (define vec-sym (gensym 'v))
-                          (define allocate (Allocate n type))
-                          (define cnt 0)
-                          (define initialize_eles
-                            (begin
-                              (for/list ([an_exp new_exps])
-                                (define ele (Prim 'vector-set! (list (Var vec-sym) (Int cnt) an_exp)))
-                                (set! cnt (+ 1 cnt))
-                                ele)))
-                          (define vector-declaration (Let vec-sym allocate (Begin initialize_eles (Var vec-sym))))
-                          (Begin (list if_cond) vector-declaration))]
+    [(HasType exp type)
+     (begin
+       (define exps (Prim-arg* exp))
+       (define new_exps (map expose-allocation exps))
+       (define n (length exps))
+       (define array_size (* 8 (+ 1 n)))
+       (define arg1 (Prim '+ (list (GlobalValue 'free_ptr) (Int array_size))))
+       (define arg2 (GlobalValue 'fromspace_end))
+       (define if_cond (If (Prim '< (list arg1 arg2)) (Void) (Collect (Int array_size))))
+       (define vec-sym (gensym 'v))
+       (define allocate (Allocate array_size type))
+       (define cnt 0)
+       (define initialize_eles
+         (begin
+           (for/list ([an_exp new_exps])
+             (define ele (Prim 'vector-set! (list (Var vec-sym) (Int cnt) an_exp)))
+             (set! cnt (+ 1 cnt))
+             ele)))
+       (define vector-declaration (Let vec-sym allocate (Begin initialize_eles (Var vec-sym))))
+       (Begin (list if_cond) vector-declaration))]
     [(Var x) (Var x)]
     [(Bool b) (Bool b)]
     [(Void) (Void)]
@@ -166,8 +167,7 @@
     [(SetBang var_sym rhs) (SetBang var_sym (expose-allocation rhs))]
     [(Prim op es) (Prim op (map expose-allocation es))]
     [(WhileLoop cnd body) (WhileLoop (expose-allocation cnd) (expose-allocation body))]
-    [(Program info e) (Program info (expose-allocation e))]
-    ))
+    [(Program info e) (Program info (expose-allocation e))]))
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (define (collect-set! e)
@@ -176,6 +176,9 @@
     [(Int n) (set)]
     [(Bool b) (set)]
     [(Void) (set)]
+    [(Collect n) (set)]
+    [(Allocate n type) (set)]
+    [(GlobalValue n) (set)]
     [(If e1 e2 e3) (set-union (collect-set! e1) (collect-set! e2) (collect-set! e3))]
     [(Let x rhs body) (set-union (collect-set! rhs) (collect-set! body))]
     [(SetBang var rhs) (set-union (set var) (collect-set! rhs))]
@@ -190,6 +193,9 @@
     [(Bool x) (Bool x)]
     [(Int x) (Int x)]
     [(Void) (Void)]
+    [(Collect n) (Collect n)]
+    [(Allocate n type) (Allocate n type)]
+    [(GlobalValue n) (GlobalValue n)]
     [(If e1 e2 e3) (If (uncover-get!-exp e1 set!-vars)
                        (uncover-get!-exp e2 set!-vars)
                        (uncover-get!-exp e3 set!-vars))]
@@ -219,6 +225,9 @@
       [(Bool x) (cons (Bool x) '())]
       [(Void) (cons (Void) '())]
       [(GetBang x) (cons new_var (list (cons new_sym (Var x))))]
+      [(Collect n) (cons new_var (list (cons new_sym (Collect n))))]
+      [(Allocate n type) (cons new_var (list (cons new_sym (Allocate n type))))]
+      [(GlobalValue n) (cons new_var (list (cons new_sym (GlobalValue n))))]
       [(WhileLoop cnd body)
        (cons new_var (list (cons new_sym (WhileLoop (rco-exp cnd) (rco-exp body)))))]
       [(Begin es body) (cons new_var (list (cons new_sym (Begin (map rco-exp es) (rco-exp body)))))]
@@ -251,6 +260,9 @@
     [(Var x) (Var x)]
     [(Int x) (Int x)]
     [(Bool b) (Bool b)]
+    [(Collect n) (Collect n)]
+    [(Allocate n type) (Allocate n type)]
+    [(GlobalValue n) (GlobalValue n)]
     [(Void) (Void)]
     [(Let x e body) (Let x (rco-exp e) (rco-exp body))]
     [(Prim op es) (gen-lets (cdr (rco-atom (Prim op es))))]
@@ -310,6 +322,10 @@
     [(Int x) cont]
     [(Void) cont]
     [(Prim 'read (list)) (Seq (Prim 'read (list)) cont)]
+    [(Collect n) (Seq (Collect n) cont)]
+    [(Allocate n type) cont]
+    [(GlobalValue n) cont]
+    [(Prim 'vector-set! es) (Seq (Prim 'vector-set! es) cont)]
     [(Prim op es) cont]
     [(SetBang x rhs) (explicate-assign rhs x cont)]
     [(Let x rhs body) (let* ([body (explicate-effect body cont)]) (explicate-assign rhs x body))]
@@ -331,6 +347,9 @@
     [(Var x) (Return (Var x))]
     [(Int n) (Return (Int n))]
     [(Bool b) (Return (Bool b))]
+    [(Collect n) (Return (Collect n))]
+    [(Allocate n type) (Return (Allocate n type))]
+    [(GlobalValue n) (Return (GlobalValue n))]
     [(Prim op es) (Return (Prim op es))]
     [(Begin es body) (let* ([tail (explicate-tail body)] [seq (foldr explicate-effect tail es)]) seq)]
     [(Let x rhs body) (let* ([tail (explicate-tail body)] [nt (explicate-assign rhs x tail)]) nt)]
@@ -346,6 +365,9 @@
     [(Var y) (Seq (Assign (Var x) (Var y)) cont)]
     [(Int n) (Seq (Assign (Var x) (Int n)) cont)]
     [(Bool b) (Seq (Assign (Var x) (Bool b)) cont)]
+    [(Collect n) (Seq (Assign (Var x) (Collect n)) cont)]
+    [(Allocate n type) (Seq (Assign (Var x) (Allocate n type)) cont)]
+    [(GlobalValue n) (Seq (Assign (Var x) (GlobalValue n)) cont)]
     [(Prim op es) (Seq (Assign (Var x) (Prim op es)) cont)]
     [(If cnd e1 e2) (let* ([l1 (assign-label cont)]
                            [tail1 (explicate-assign e1 x l1)]
@@ -848,9 +870,9 @@
   `(("shrink" ,shrink ,interp-Lvec ,type-check-Lvec)
     ("uniquify" ,uniquify ,interp-Lvec ,type-check-Lvec)
     ("expose_allocation" ,expose-allocation ,interp-Lvec-prime ,type-check-Lvec)
-    ;; ("uncover-get!" ,uncover-get! ,interp-Lvec ,type-check-Lvec)
-    ;; ("remove complex opera*" ,remove-complex-opera* ,interp-Lvec ,type-check-Lvec)
-    ;; ("explicate control" ,explicate-control ,interp-Cvec ,type-check-Cvec)
+    ("uncover-get!" ,uncover-get! ,interp-Lvec-prime ,type-check-Lvec)
+    ("remove complex opera*" ,remove-complex-opera* ,interp-Lvec-prime ,type-check-Lvec)
+    ("explicate control" ,explicate-control ,interp-Cvec ,type-check-Cvec)
     ;; ("instruction selection" ,select-instructions ,interp-x86-1)
     ;; ("liveness analysis" ,uncover_live ,interp-x86-1)
     ;; ("build interference" ,build-interference ,interp-x86-1)
