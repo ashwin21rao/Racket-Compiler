@@ -147,7 +147,7 @@
        (define arg2 (GlobalValue 'fromspace_end))
        (define if_cond (If (Prim '< (list arg1 arg2)) (Void) (Collect (Int array_size))))
        (define vec-sym (gensym 'v))
-       (define allocate (Allocate array_size type))
+       (define allocate (Allocate n type))
        (define cnt 0)
        (define initialize_eles
          (begin
@@ -449,6 +449,24 @@
     [(Assign x (Prim '- (list a1))) (select-instructions-neg x a1)]
     [(Assign x (Prim '- (list a1 a2))) (select-instructions-sub x a1 a2)]
     [(Prim 'read '()) (list (Callq 'read_int 0))]
+    [(Assign x (Allocate n type)) 
+     (let* ([instr1 (Instr 'movq (list (Deref 'rip 'free_ptr) x))]
+            [instr2 (Instr 'addq (list (Imm (* 8 (+ n 1)) (Deref 'rip 'free_ptr))))]
+            [instr3 (Instr 'movq (list x (Reg 'r11))] ;; TODO
+            ) (list instr1 instr2 instr3))]
+    [(Prim 'vector-set! (list vec (Int pos) an_exp)) ;; vector ref can be a statement
+     (let* ([instr1 (Instr 'movq (list vec (Reg 'r11)))]
+            [instr2 (Instr 'movq (list (an_exp) (Deref 'r11 (* (+ 1 pos) 8))))])
+       (list instr1 instr2))]
+    [(Assign x (Prim 'vector-set! (list vec (Int pos) an_exp)))
+     (let* ([instr1 (Instr 'movq (list vec (Reg 'r11)))]
+            [instr2 (Instr 'movq (list (an_exp) (Deref 'r11 (* (+ 1 pos) 8))))]
+            [instr3 (Instr 'movq (list (Var x) (Imm 0)))])
+       (list instr1 instr2 instr3))]
+    [(Assign x (Prim 'vector-ref (list vec (Int pos))))
+     (let* ([instr1 (Instr 'movq (list vec (Reg 'r11)))]
+            [instr2 (Instr 'movq (list (Deref 'r11 (* (+ 1 pos) 8)) x))])
+       (list instr1 instr2))]
     [(Assign x (Prim 'read '())) (let* ([instr1 (Callq 'read_int 0)]
                                         [instr2 (Instr 'movq (list (Reg 'rax) x))])
                                    (list instr1 instr2))]
