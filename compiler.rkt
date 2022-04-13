@@ -617,13 +617,26 @@
              [stacksize (+ callee-size local_var_size)]
              [stacksize (+ stacksize (modulo stacksize 16))]
              [stacksize (- stacksize callee-size)]
+             [root-stack-instrs (list
+                                 (Instr 'movq (list (Imm 65536) (Reg 'rdi))) 
+                                 (Instr 'movq (list (Imm 65536) (Reg 'rsi)))
+                                 (Callq 'initialze 2) 
+                                 (Instr 'movq (list (Global 'rootstack_begin) (Reg 'r15))) 
+                                 )] 
+             [root-stack-instrs2 (make-list (dict-ref info 'num-root-spills)
+                                    (list 
+                                      (Instr 'movq (list (Imm 0) (Deref 'r15 0)))
+                                      (Instr 'addq (list (Imm 8) (Reg 'r15)))
+                                   ))]
              [instr3 (Instr 'subq (list (Imm stacksize) (Reg 'rsp)))]
              [instr4 (Jmp 'start)]
+             [instr44 (Instr 'subq (list (Imm (* 8 (dict-ref info 'num-root-spills))) (Reg 'r15)))] 
              [instr5 (Instr 'addq (list (Imm stacksize) (Reg 'rsp)))]
              [instr6 (Instr 'popq (list (Reg 'rbp)))]
              [instr7 (Retq)]
-             [main_block (Block empty (flatten (list instr1 instr2 instr-callee-push instr3 instr4)))]
-             [conclusion_block (Block empty (flatten (list instr5 instr-callee-pop instr6 instr7)))]
+
+             [main_block (Block empty (flatten (list instr1 instr2 instr-callee-push instr3 root-stack-instrs root-stack-instrs2 instr4)))]
+             [conclusion_block (Block empty (flatten (list instr44 instr5 instr-callee-pop instr6 instr7)))]
              [blocks (dict-set* blocks 'main main_block 'conclusion conclusion_block)])
         blocks))]))
 
@@ -879,22 +892,29 @@
                                [total_offset (- total_offset)])
                           (cons color (Deref 'rbp total_offset)))]))])
     cth))
+(define root-offsets (make-hash))
+(define counter 0)
 
 (define (allocate-register-instrs inst_list vtc cth tuples)
-  (define counter 1)
   (for/list ([inst inst_list])
     (match inst
-      [(Instr op args) (Instr op
-                              (for/list ([arg args])
-                                (match arg
-                                  [(Var v) (if (member v tuples)
-                                               (begin
-                                                 (set! counter (+ counter 1))
-                                                 (Deref 'r15 ( * counter  8)))
-                                               (let* ([color (dict-ref vtc (Var v))]
-                                                      [home (dict-ref cth color)])
-                                                 home))]
-                                  [else arg])))]
+      [(Instr op args)
+       (Instr op
+              (for/list ([arg args])
+                (match arg
+                  [(Var v) 
+                   (if (member v tuples)
+                               (let ([offset (dict-ref root-offsets
+                                                       v
+                                                       (lambda ()
+                                                         (begin
+                                                           (set! counter (+ 1 counter))
+                                                           (dict-set! root-offsets v counter)
+                                                           counter)))])
+                                 (Deref 'r15 (* offset 8)))
+                               (let* ([color (dict-ref vtc (Var v))] [home (dict-ref cth color)])
+                                 home))]
+                  [else arg])))]
       [else inst])))
 
 (define (allocate-register-block cur_block vtc cth tuples)
@@ -919,6 +939,8 @@
             [info (dict-set info 'homes color-to-home)]
             [info (dict-remove info 'liveness)]
             [tuples (map car (filter (lambda (x) (list? (cdr x))) (dict-ref info 'locals-types)))]
+            [_ (set! root-offsets (make-hash))]
+            [_ (set! counter 0)]
             [new_blocks
              (map (lambda (x) (allocate-register-block x var-to-color color-to-home tuples)) blocks)])
        (X86Program info new_blocks))]))
@@ -938,7 +960,6 @@
     ("instruction selection" ,select-instructions ,interp-pseudo-x86-2)
     ("liveness analysis" ,uncover_live ,interp-pseudo-x86-2)
     ("build interference" ,build-interference ,interp-pseudo-x86-2)
-    ("allocate registers" ,allocate-registers ,interp-x86-2)
-    ;; ("patch instructions" ,patch-instructions ,interp-x86-1)
-    ;; ("prelude-and-conclusion" ,prelude-and-conclusion ,interp-x86-1)
-    ))
+    ("allocate registers" ,allocate-registers ,interp-pseudo-x86-2)
+    ("patch instructions" ,patch-instructions ,interp-x86-2)
+    ("prelude-and-conclusion" ,prelude-and-conclusion ,interp-x86-2)))
