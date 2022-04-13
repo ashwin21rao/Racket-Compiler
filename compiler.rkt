@@ -400,7 +400,7 @@
   (match type
     [(list) 0]
     [(cons sym remaining) (let* ([isvec (cond
-                                          [(equal? sym 'vec) (expt 2 position)]
+                                          [(equal? sym 'Vector) (expt 2 position)]
                                           [else 0])]
                                  [remainingval (get-mask remaining (- position 1))])
                             (+ isvec remainingval))]))
@@ -783,12 +783,24 @@
      (let* ([instrs (flatten-one (map (lambda (blck) (Block-instr* (cdr blck))) blocks))]
             [liveness (flatten-one (map get-liveness-from-block blocks))]
             [blocks (map remove-liveness blocks)]
+            [types (dict-ref info 'locals-types)]
             [edges (map get-interference-edges instrs liveness)]
+            [tuple-typed-vars (map car (filter (lambda (x) (list? (cdr x))) types))]
+            [callee-saved (map Reg '(rax rcx rdx rsi rdi r8 r9 r10 r11 rsp rbp rbx r12 r13 r14 r15))]
+            [edges2 (cartesian-product tuple-typed-vars callee-saved)]
+            [edges (append edges edges2)]
             [graph (undirected-graph (foldr append '() edges))]
-            ;; [info (dict-set info 'conflict-edges edges)]
             [mg (undirected-graph (build-move-graph instrs))]
             [mg-edges (get-edges mg)]
-            [info (dict-set* info 'conflicts graph 'move-graph mg 'mg-edges mg-edges)])
+            [info (dict-set* info
+                             'conflicts
+                             graph
+                             'move-graph
+                             mg
+                             'mg-edges
+                             mg-edges
+                             'num-root-spills
+                             (length tuple-typed-vars))])
        (X86Program info blocks))]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -868,21 +880,27 @@
                           (cons color (Deref 'rbp total_offset)))]))])
     cth))
 
-(define (allocate-register-instrs inst_list vtc cth)
+(define (allocate-register-instrs inst_list vtc cth tuples)
+  (define counter 1)
   (for/list ([inst inst_list])
     (match inst
-      [(Instr op args)
-       (Instr op
-              (for/list ([arg args])
-                (match arg
-                  [(Var v) (let* ([color (dict-ref vtc (Var v))] [home (dict-ref cth color)]) home)]
-                  [else arg])))]
+      [(Instr op args) (Instr op
+                              (for/list ([arg args])
+                                (match arg
+                                  [(Var v) (if (member v tuples)
+                                               (begin
+                                                 (set! counter (+ counter 1))
+                                                 (Deref 'r15 ( * counter  8)))
+                                               (let* ([color (dict-ref vtc (Var v))]
+                                                      [home (dict-ref cth color)])
+                                                 home))]
+                                  [else arg])))]
       [else inst])))
 
-(define (allocate-register-block cur_block vtc cth)
+(define (allocate-register-block cur_block vtc cth tuples)
   (match cur_block
     [(cons label (Block info instr_list))
-     (cons label (Block info (allocate-register-instrs instr_list vtc cth)))]))
+     (cons label (Block info (allocate-register-instrs instr_list vtc cth tuples)))]))
 
 (define (allocate-registers p)
   (match p
@@ -900,8 +918,9 @@
             [info (dict-set info 'num_spilled num_spilled)]
             [info (dict-set info 'homes color-to-home)]
             [info (dict-remove info 'liveness)]
-            [new_blocks (map (lambda (x) (allocate-register-block x var-to-color color-to-home))
-                             blocks)])
+            [tuples (map car (filter (lambda (x) (list? (cdr x))) (dict-ref info 'locals-types)))]
+            [new_blocks
+             (map (lambda (x) (allocate-register-block x var-to-color color-to-home tuples)) blocks)])
        (X86Program info new_blocks))]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -917,9 +936,9 @@
     ("remove complex opera*" ,remove-complex-opera* ,interp-Lvec-prime ,type-check-Lvec)
     ("explicate control" ,explicate-control ,interp-Cvec ,type-check-Cvec)
     ("instruction selection" ,select-instructions ,interp-pseudo-x86-2)
-    ;; ("liveness analysis" ,uncover_live ,interp-x86-1)
-    ;; ("build interference" ,build-interference ,interp-x86-1)
-    ;; ("allocate registers" ,allocate-registers ,interp-x86-1)
+    ("liveness analysis" ,uncover_live ,interp-pseudo-x86-2)
+    ("build interference" ,build-interference ,interp-pseudo-x86-2)
+    ("allocate registers" ,allocate-registers ,interp-x86-2)
     ;; ("patch instructions" ,patch-instructions ,interp-x86-1)
     ;; ("prelude-and-conclusion" ,prelude-and-conclusion ,interp-x86-1)
     ))
