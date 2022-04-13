@@ -402,14 +402,14 @@
     [(cons sym remaining) (let* ([isvec (cond
                                           [(equal? sym 'Vector) (expt 2 position)]
                                           [else 0])]
-                                 [remainingval (get-mask remaining (- position 1))])
+                                 [remainingval (get-mask remaining (+ position 1))])
                             (+ isvec remainingval))]))
 
 (define (get-tag n type)
   (begin
     (define frwd 1)
     (define size (* 2 n)) ;; shift it by one byte
-    (define shiftvalue 50) ;; shift to the 8th bit (2 ** 7)
+    (define shiftvalue 8) ;; shift to the 8th bit (2 ** 7)
     (define mask (get-mask type shiftvalue))
     (+ mask size frwd)))
 
@@ -620,7 +620,7 @@
              [root-stack-instrs (list
                                  (Instr 'movq (list (Imm 65536) (Reg 'rdi))) 
                                  (Instr 'movq (list (Imm 65536) (Reg 'rsi)))
-                                 (Callq 'initialze 2) 
+                                 (Callq 'initialize 2) 
                                  (Instr 'movq (list (Global 'rootstack_begin) (Reg 'r15))) 
                                  )] 
              [root-stack-instrs2 (make-list (dict-ref info 'num-root-spills)
