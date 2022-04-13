@@ -396,6 +396,23 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
+(define (get-mask type position)
+  (match type
+    [(list) 0]
+    [(cons sym remaining) (let* ([isvec (cond
+                                          [(equal? sym 'vec) (expt 2 position)]
+                                          [else 0])]
+                                 [remainingval (get-mask remaining (- position 1))])
+                            (+ isvec remainingval))]))
+
+(define (get-tag n type)
+  (begin
+    (define frwd 1)
+    (define size (* 2 n)) ;; shift it by one byte
+    (define shiftvalue 50) ;; shift to the 8th bit (2 ** 7)
+    (define mask (get-mask type shiftvalue))
+    (+ mask size frwd)))
+
 ;; select-instructions-atom: C0 atom -> pseudo-x86 atom
 (define (select-instructions-atm atm)
   (match atm
@@ -403,6 +420,7 @@
     [(Int x) (Imm x)]
     [(Bool #t) (Imm 1)]
     [(Bool #f) (Imm 0)]
+    [(GlobalValue x) (Global x)]
     [(Void) (Imm 0)]
     [else (error "Unhandled atom in select instructions" atm)]))
 
@@ -449,24 +467,31 @@
     [(Assign x (Prim '- (list a1))) (select-instructions-neg x a1)]
     [(Assign x (Prim '- (list a1 a2))) (select-instructions-sub x a1 a2)]
     [(Prim 'read '()) (list (Callq 'read_int 0))]
-    [(Assign x (Allocate n type)) 
-     (let* ([instr1 (Instr 'movq (list (Deref 'rip 'free_ptr) x))]
-            [instr2 (Instr 'addq (list (Imm (* 8 (+ n 1)) (Deref 'rip 'free_ptr))))]
-            [instr3 (Instr 'movq (list x (Reg 'r11))] ;; TODO
-            ) (list instr1 instr2 instr3))]
+    [(Assign x (Allocate n type))
+     (let* ([instr1 (Instr 'movq (list (Global 'free_ptr) (Reg 'r11)))]
+            [instr2 (Instr 'addq (list (Imm (* 8 (+ n 1))) (Global 'free_ptr)))]
+            [instr3 (Instr 'movq (list (Imm (get-tag n type)) (Deref 'r11 0)))]
+            [instr4 (Instr 'movq (list (Reg 'r11) x))])
+       (list instr1 instr2 instr3 instr4))]
     [(Prim 'vector-set! (list vec (Int pos) an_exp)) ;; vector ref can be a statement
      (let* ([instr1 (Instr 'movq (list vec (Reg 'r11)))]
-            [instr2 (Instr 'movq (list (an_exp) (Deref 'r11 (* (+ 1 pos) 8))))])
+            [instr2
+             (Instr 'movq (list (select-instructions-atm an_exp) (Deref 'r11 (* (+ 1 pos) 8))))])
        (list instr1 instr2))]
     [(Assign x (Prim 'vector-set! (list vec (Int pos) an_exp)))
      (let* ([instr1 (Instr 'movq (list vec (Reg 'r11)))]
-            [instr2 (Instr 'movq (list (an_exp) (Deref 'r11 (* (+ 1 pos) 8))))]
+            [instr2
+             (Instr 'movq (list (select-instructions-atm an_exp) (Deref 'r11 (* (+ 1 pos) 8))))]
             [instr3 (Instr 'movq (list (Var x) (Imm 0)))])
        (list instr1 instr2 instr3))]
     [(Assign x (Prim 'vector-ref (list vec (Int pos))))
      (let* ([instr1 (Instr 'movq (list vec (Reg 'r11)))]
             [instr2 (Instr 'movq (list (Deref 'r11 (* (+ 1 pos) 8)) x))])
        (list instr1 instr2))]
+    [(Collect (Int n)) (let* ([instr1 (Instr 'movq (list (Reg 'r15) (Reg 'rdi)))]
+                              [instr2 (Instr 'movq (list (Imm n) (Reg 'rsi)))]
+                              [instr3 (Callq 'collect 2)])
+                         (list instr1 instr2 instr3))]
     [(Assign x (Prim 'read '())) (let* ([instr1 (Callq 'read_int 0)]
                                         [instr2 (Instr 'movq (list (Reg 'rax) x))])
                                    (list instr1 instr2))]
@@ -891,7 +916,7 @@
     ("uncover-get!" ,uncover-get! ,interp-Lvec-prime ,type-check-Lvec)
     ("remove complex opera*" ,remove-complex-opera* ,interp-Lvec-prime ,type-check-Lvec)
     ("explicate control" ,explicate-control ,interp-Cvec ,type-check-Cvec)
-    ;; ("instruction selection" ,select-instructions ,interp-x86-1)
+    ("instruction selection" ,select-instructions ,interp-pseudo-x86-2)
     ;; ("liveness analysis" ,uncover_live ,interp-x86-1)
     ;; ("build interference" ,build-interference ,interp-x86-1)
     ;; ("allocate registers" ,allocate-registers ,interp-x86-1)
