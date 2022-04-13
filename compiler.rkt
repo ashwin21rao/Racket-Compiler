@@ -488,6 +488,13 @@
      (let* ([instr1 (Instr 'movq (list vec (Reg 'r11)))]
             [instr2 (Instr 'movq (list (Deref 'r11 (* (+ 1 pos) 8)) x))])
        (list instr1 instr2))]
+    [(Assign x (Prim 'vector-length (list vec)))
+     (let* ([instr1 (Instr 'movq (list vec (Reg 'r11)))]
+            [instr2 (Instr 'movq (list (Deref 'r11 0) x))]
+            [instr3 (Instr 'sarq (list (Imm 1) x))]
+            [instr4 (Instr 'andq (list (Imm 127) x))]
+            )
+       (list instr1 instr2 instr3 instr4))]
     [(Collect (Int n)) (let* ([instr1 (Instr 'movq (list (Reg 'r15) (Reg 'rdi)))]
                               [instr2 (Instr 'movq (list (Imm n) (Reg 'rsi)))]
                               [instr3 (Callq 'collect 2)])
