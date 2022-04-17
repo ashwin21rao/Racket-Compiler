@@ -106,7 +106,10 @@
     [(SetBang var rhs) (SetBang var (shrink rhs))]
     [(WhileLoop cnd body) (WhileLoop (shrink cnd) (shrink body))]
     [(HasType exp type) (HasType (shrink exp) type)]
-    [(ProgramDefsExp info defs exp) (ProgramDefs info (append (map shrink defs) (list (Def 'main empty 'Integer empty (shrink exp)))))]
+    ;; Lfun
+    [(ProgramDefsExp info defs exp)
+     (ProgramDefs info
+                  (append (map shrink defs) (list (Def 'main empty 'Integer empty (shrink exp)))))]
     [(Apply fun exps) (Apply (shrink fun) (map shrink exps))]
     [(Def name params rty info body) (Def name params rty info (shrink body))]
     [else (error "Shrink unhandled case" p)]))
@@ -127,12 +130,22 @@
       [(SetBang var_sym rhs) (SetBang (dict-ref env var_sym) ((uniquify-exp env) rhs))]
       [(WhileLoop cnd body) (WhileLoop ((uniquify-exp env) cnd) ((uniquify-exp env) body))]
       [(HasType exp type) (HasType ((uniquify-exp env) exp) type)]
-      [(Prim op es) (Prim op (map (uniquify-exp env) es))])))
+      [(Prim op es) (Prim op (map (uniquify-exp env) es))]
+      [(Apply fun exps) (Apply ((uniquify-exp env) fun) (map (uniquify-exp env) exps))]
+      [(Def name params rty info body)
+       (set! env (dict-set env name name))
+       (define new_params
+         (for/list ([param params])
+           (define new_name (gensym (car param)))
+           (set! env (dict-set env (car param) new_name))
+           (cons new_name (cdr param))))
+       (Def name new_params rty info ((uniquify-exp env) body))]
+      [else (error "Uniquify unhandled case" e)])))
 
 ;; uniquify : R1 -> R1
 (define (uniquify p)
   (match p
-    [(Program info e) (Program info ((uniquify-exp '()) e))]))
+    [(ProgramDefs info defs) (ProgramDefs info (map (uniquify-exp '()) defs))]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (define (expose-allocation p)
@@ -488,13 +501,11 @@
      (let* ([instr1 (Instr 'movq (list vec (Reg 'r11)))]
             [instr2 (Instr 'movq (list (Deref 'r11 (* (+ 1 pos) 8)) x))])
        (list instr1 instr2))]
-    [(Assign x (Prim 'vector-length (list vec)))
-     (let* ([instr1 (Instr 'movq (list vec (Reg 'r11)))]
-            [instr2 (Instr 'movq (list (Deref 'r11 0) x))]
-            [instr3 (Instr 'sarq (list (Imm 1) x))]
-            [instr4 (Instr 'andq (list (Imm 127) x))]
-            )
-       (list instr1 instr2 instr3 instr4))]
+    [(Assign x (Prim 'vector-length (list vec))) (let* ([instr1 (Instr 'movq (list vec (Reg 'r11)))]
+                                                        [instr2 (Instr 'movq (list (Deref 'r11 0) x))]
+                                                        [instr3 (Instr 'sarq (list (Imm 1) x))]
+                                                        [instr4 (Instr 'andq (list (Imm 127) x))])
+                                                   (list instr1 instr2 instr3 instr4))]
     [(Collect (Int n)) (let* ([instr1 (Instr 'movq (list (Reg 'r15) (Reg 'rdi)))]
                               [instr2 (Instr 'movq (list (Imm n) (Reg 'rsi)))]
                               [instr3 (Callq 'collect 2)])
@@ -624,26 +635,30 @@
              [stacksize (+ callee-size local_var_size)]
              [stacksize (+ stacksize (modulo stacksize 16))]
              [stacksize (- stacksize callee-size)]
-             [root-stack-instrs (list
-                                 (Instr 'movq (list (Imm 65536) (Reg 'rdi))) 
-                                 (Instr 'movq (list (Imm 65536) (Reg 'rsi)))
-                                 (Callq 'initialize 2) 
-                                 (Instr 'movq (list (Global 'rootstack_begin) (Reg 'r15))) 
-                                 )] 
+             [root-stack-instrs (list (Instr 'movq (list (Imm 65536) (Reg 'rdi)))
+                                      (Instr 'movq (list (Imm 65536) (Reg 'rsi)))
+                                      (Callq 'initialize 2)
+                                      (Instr 'movq (list (Global 'rootstack_begin) (Reg 'r15))))]
              [root-stack-instrs2 (make-list (dict-ref info 'num-root-spills)
-                                    (list 
-                                      (Instr 'movq (list (Imm 0) (Deref 'r15 0)))
-                                      (Instr 'addq (list (Imm 8) (Reg 'r15)))
-                                   ))]
+                                            (list (Instr 'movq (list (Imm 0) (Deref 'r15 0)))
+                                                  (Instr 'addq (list (Imm 8) (Reg 'r15)))))]
              [instr3 (Instr 'subq (list (Imm stacksize) (Reg 'rsp)))]
              [instr4 (Jmp 'start)]
-             [instr44 (Instr 'subq (list (Imm (* 8 (dict-ref info 'num-root-spills))) (Reg 'r15)))] 
+             [instr44 (Instr 'subq (list (Imm (* 8 (dict-ref info 'num-root-spills))) (Reg 'r15)))]
              [instr5 (Instr 'addq (list (Imm stacksize) (Reg 'rsp)))]
              [instr6 (Instr 'popq (list (Reg 'rbp)))]
              [instr7 (Retq)]
 
-             [main_block (Block empty (flatten (list instr1 instr2 instr-callee-push instr3 root-stack-instrs root-stack-instrs2 instr4)))]
-             [conclusion_block (Block empty (flatten (list instr44 instr5 instr-callee-pop instr6 instr7)))]
+             [main_block (Block empty
+                                (flatten (list instr1
+                                               instr2
+                                               instr-callee-push
+                                               instr3
+                                               root-stack-instrs
+                                               root-stack-instrs2
+                                               instr4)))]
+             [conclusion_block
+              (Block empty (flatten (list instr44 instr5 instr-callee-pop instr6 instr7)))]
              [blocks (dict-set* blocks 'main main_block 'conclusion conclusion_block)])
         blocks))]))
 
@@ -909,8 +924,7 @@
        (Instr op
               (for/list ([arg args])
                 (match arg
-                  [(Var v) 
-                   (if (member v tuples)
+                  [(Var v) (if (member v tuples)
                                (let ([offset (dict-ref root-offsets
                                                        v
                                                        (lambda ()
@@ -958,9 +972,8 @@
 ;; must be named "compiler.rkt"
 (define compiler-passes
   ;; ("partial evaluation" ,pe-Lvar ,interp-Lvar)
-  `(
-    ("shrink" ,shrink ,interp-Lfun,type-check-Lfun)
-    ;; ("uniquify" ,uniquify ,interp-Lvec ,type-check-Lvec)
+  `(("shrink" ,shrink ,interp-Lfun ,type-check-Lfun)
+    ("uniquify" ,uniquify ,interp-Lfun ,type-check-Lfun)
     ;; ("expose_allocation" ,expose-allocation ,interp-Lvec-prime ,type-check-Lvec)
     ;; ("uncover-get!" ,uncover-get! ,interp-Lvec-prime ,type-check-Lvec)
     ;; ("remove complex opera*" ,remove-complex-opera* ,interp-Lvec-prime ,type-check-Lvec)
