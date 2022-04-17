@@ -5,9 +5,6 @@
 (require racket/fixnum)
 (require data/queue)
 (require graph)
-(require "interp-Lvec-prime.rkt")
-(require "interp-Lvec.rkt")
-(require "interp-Cvec.rkt")
 (require "interp.rkt")
 
 (require "utilities.rkt")
@@ -15,8 +12,8 @@
 (require "multigraph.rkt")
 (provide (all-defined-out))
 (require racket/trace)
-(require "type-check-Lvec.rkt")
-(require "type-check-Cvec.rkt")
+(require "interp-Lfun.rkt")
+(require "type-check-Lfun.rkt")
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Lint examples
@@ -95,7 +92,7 @@
 ;; shrink Lvec -> Lvec
 (define (shrink p)
   (match p
-    [(Program info e) (Program info (shrink e))]
+    ;; [(Program info e) (Program info (shrink e))]
     [(Var x) (Var x)]
     [(Int x) (Int x)]
     [(Void) (Void)]
@@ -109,6 +106,9 @@
     [(SetBang var rhs) (SetBang var (shrink rhs))]
     [(WhileLoop cnd body) (WhileLoop (shrink cnd) (shrink body))]
     [(HasType exp type) (HasType (shrink exp) type)]
+    [(ProgramDefsExp info defs exp) (ProgramDefs info (append (map shrink defs) (list (Def 'main empty 'Integer empty (shrink exp)))))]
+    [(Apply fun exps) (Apply (shrink fun) (map shrink exps))]
+    [(Def name params rty info body) (Def name params rty info (shrink body))]
     [else (error "Shrink unhandled case" p)]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -958,15 +958,17 @@
 ;; must be named "compiler.rkt"
 (define compiler-passes
   ;; ("partial evaluation" ,pe-Lvar ,interp-Lvar)
-  `(("shrink" ,shrink ,interp-Lvec ,type-check-Lvec)
-    ("uniquify" ,uniquify ,interp-Lvec ,type-check-Lvec)
-    ("expose_allocation" ,expose-allocation ,interp-Lvec-prime ,type-check-Lvec)
-    ("uncover-get!" ,uncover-get! ,interp-Lvec-prime ,type-check-Lvec)
-    ("remove complex opera*" ,remove-complex-opera* ,interp-Lvec-prime ,type-check-Lvec)
-    ("explicate control" ,explicate-control ,interp-Cvec ,type-check-Cvec)
-    ("instruction selection" ,select-instructions ,interp-pseudo-x86-2)
-    ("liveness analysis" ,uncover_live ,interp-pseudo-x86-2)
-    ("build interference" ,build-interference ,interp-pseudo-x86-2)
-    ("allocate registers" ,allocate-registers ,interp-pseudo-x86-2)
-    ("patch instructions" ,patch-instructions ,interp-x86-2)
-    ("prelude-and-conclusion" ,prelude-and-conclusion ,interp-x86-2)))
+  `(
+    ("shrink" ,shrink ,interp-Lfun,type-check-Lfun)
+    ;; ("uniquify" ,uniquify ,interp-Lvec ,type-check-Lvec)
+    ;; ("expose_allocation" ,expose-allocation ,interp-Lvec-prime ,type-check-Lvec)
+    ;; ("uncover-get!" ,uncover-get! ,interp-Lvec-prime ,type-check-Lvec)
+    ;; ("remove complex opera*" ,remove-complex-opera* ,interp-Lvec-prime ,type-check-Lvec)
+    ;; ("explicate control" ,explicate-control ,interp-Cvec ,type-check-Cvec)
+    ;; ("instruction selection" ,select-instructions ,interp-pseudo-x86-2)
+    ;; ("liveness analysis" ,uncover_live ,interp-pseudo-x86-2)
+    ;; ("build interference" ,build-interference ,interp-pseudo-x86-2)
+    ;; ("allocate registers" ,allocate-registers ,interp-pseudo-x86-2)
+    ;; ("patch instructions" ,patch-instructions ,interp-x86-2)
+    ;; ("prelude-and-conclusion" ,prelude-and-conclusion ,interp-x86-2)
+    ))
