@@ -13,8 +13,10 @@
 (provide (all-defined-out))
 (require racket/trace)
 (require "interp-Lfun.rkt")
+(require "interp-Cfun.rkt")
 (require "interp-Lfun-prime.rkt")
 (require "type-check-Lfun.rkt")
+(require "type-check-Cfun.rkt")
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Lint examples
@@ -327,66 +329,73 @@
       [(FunRef x n) (FunRef x n)]
       [(Apply fun exps) (Apply ((uncover-get!-exp set!-vars) fun)
                                (map (uncover-get!-exp set!-vars) exps))]
-      [(Def name params rty info body) (Def name params rty info ((uncover-get!-exp set!-vars) body))])))
+      [(Def name params rty info body)
+       (Def name params rty info ((uncover-get!-exp set!-vars) body))])))
 
 (define (uncover-get! p)
   (match p
-    [(ProgramDefs info defs)
-     (ProgramDefs info (for/list ([def defs])
-                        (define set!-vars (collect-set! def)) 
-                        ((uncover-get!-exp set!-vars) def)))]))
+    [(ProgramDefs info defs) (ProgramDefs info
+                                          (for/list ([def defs])
+                                            (define set!-vars (collect-set! def))
+                                            ((uncover-get!-exp set!-vars) def)))]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 ;; return cons(atom, (list (cons variables exp)))
 (define (rco-atom expr)
-    (define new_sym (gensym 'temp))
-    (define new_var (Var new_sym))
-    (match expr
-      [(Var x) (cons (Var x) '())]
-      [(Int x) (cons (Int x) '())]
-      [(Bool x) (cons (Bool x) '())]
-      [(Void) (cons (Void) '())]
-      [(GetBang x) (cons new_var (list (cons new_sym (Var x))))]
-      [(Collect n) (cons new_var (list (cons new_sym (Collect n))))]
-      [(Allocate n type) (cons new_var (list (cons new_sym (Allocate n type))))]
-      [(GlobalValue n) (cons new_var (list (cons new_sym (GlobalValue n))))]
-      [(WhileLoop cnd body)
-       (cons new_var (list (cons new_sym (WhileLoop (rco-exp cnd) (rco-exp body)))))]
-      [(Begin es body) (cons new_var (list (cons new_sym (Begin (map rco-exp es) (rco-exp body)))))]
-      [(SetBang x rhs) (cons new_var (list (cons new_sym (SetBang x (rco-exp rhs)))))]
-      [(If cmp e1 e2) (let* ([new_sym (gensym 'temp)] ;; refactor this
-                             [new_var (Var new_sym)]
-                             [list_1 (cons new_sym (If (rco-exp cmp) (rco-exp e1) (rco-exp e2)))])
-                        (cons new_var (list list_1)))]
-      [(Let x e body) (let* ([new_sym (gensym 'temp)]
-                             [new_var (Var new_sym)]
-                             [list_1 (cons x (rco-exp e))]
-                             [list_2 (cons new_sym (rco-exp body))]
-                             [list_3 (append (list list_1) (list list_2))])
-                        (cons new_var list_3))]
-      [(Apply fun es) (let* ([new_sym (gensym 'temp)]
+  (define new_sym (gensym 'temp))
+  (define new_var (Var new_sym))
+  (match expr
+    [(Var x) (cons (Var x) '())]
+    [(Int x) (cons (Int x) '())]
+    [(Bool x) (cons (Bool x) '())]
+    [(Void) (cons (Void) '())]
+    [(GetBang x) (cons new_var (list (cons new_sym (Var x))))]
+    [(Collect n) (cons new_var (list (cons new_sym (Collect n))))]
+    [(Allocate n type) (cons new_var (list (cons new_sym (Allocate n type))))]
+    [(GlobalValue n) (cons new_var (list (cons new_sym (GlobalValue n))))]
+    [(WhileLoop cnd body)
+     (cons new_var (list (cons new_sym (WhileLoop (rco-exp cnd) (rco-exp body)))))]
+    [(Begin es body) (cons new_var (list (cons new_sym (Begin (map rco-exp es) (rco-exp body)))))]
+    [(SetBang x rhs) (cons new_var (list (cons new_sym (SetBang x (rco-exp rhs)))))]
+    [(If cmp e1 e2) (let* ([new_sym (gensym 'temp)] ;; refactor this
                            [new_var (Var new_sym)]
-                           [pairs (map rco-atom es)]
-                           [atoms (map car pairs)]
-                           [fun-ref-pair (rco-atom fun)]
-                           [fun-ref-atom (car fun-ref-pair)]
-                           [vs (append (foldr append '() (append (map cdr pairs) (list (cdr fun-ref-pair))))
-                                       (list (cons new_sym (Apply fun-ref-atom atoms))))])
-                      (cons new_var vs))]
-      [(Prim op es) (let* ([new_sym (gensym 'temp)]
+                           [list_1 (cons new_sym (If (rco-exp cmp) (rco-exp e1) (rco-exp e2)))])
+                      (cons new_var (list list_1)))]
+    [(Let x e body) (let* ([new_sym (gensym 'temp)]
                            [new_var (Var new_sym)]
-                           [pairs (map rco-atom es)]
-                           [atoms (map car pairs)]
-                           [vs (append (foldr append '() (map cdr pairs))
-                                       (list (cons new_sym (Prim op atoms))))])
-                      (cons new_var vs))]
-      [(FunRef x n) (cons new_var (list (cons new_sym (FunRef x n))))]))
+                           [list_1 (cons x (rco-exp e))]
+                           [list_2 (cons new_sym (rco-exp body))]
+                           [list_3 (append (list list_1) (list list_2))])
+                      (cons new_var list_3))]
+    [(Apply fun es)
+     (let* ([new_sym (gensym 'temp)]
+            [new_var (Var new_sym)]
+            [pairs (map rco-atom es)]
+            [atoms (map car pairs)]
+            [fun-ref-pair (rco-atom fun)]
+            [fun-ref-atom (car fun-ref-pair)]
+            [vs (append (foldr append '() (append (map cdr pairs) (list (cdr fun-ref-pair))))
+                        (list (cons new_sym (Apply fun-ref-atom atoms))))])
+       (cons new_var vs))]
+    [(Prim op es) (let* ([new_sym (gensym 'temp)]
+                         [new_var (Var new_sym)]
+                         [pairs (map rco-atom es)]
+                         [atoms (map car pairs)]
+                         [vs (append (foldr append '() (map cdr pairs))
+                                     (list (cons new_sym (Prim op atoms))))])
+                    (cons new_var vs))]
+    [(FunRef x n) (cons new_var (list (cons new_sym (FunRef x n))))]))
 
 (define (gen-lets lst)
   (cond
     [(= 1 (length lst)) (cdar lst)]
     [else (Let (caar lst) (cdar lst) (gen-lets (rest lst)))]))
+
+(define (gen-lets-extra lst)
+  (cond
+    [(= 1 (length lst)) (Let (caar lst) (cdar lst) (Var (caar lst)))]
+    [else (Let (caar lst) (cdar lst) (gen-lets-extra (rest lst)))]))
 
 (define (rco-exp e)
   (match e
@@ -406,7 +415,7 @@
     [(If cmp e1 e2) (If (rco-exp cmp) (rco-exp e1) (rco-exp e2))]
     ;; Functions
     [(FunRef x n) (FunRef x n)]
-    [(Apply fun exps) (gen-lets (cdr (rco-atom (Apply fun exps))))]
+    [(Apply fun exps) (gen-lets-extra (cdr (rco-atom (Apply fun exps))))]
     [(Def name params rty info body) (Def name params rty info (rco-exp body))]))
 
 ;; remove-complex-opera* : R1 -> R1
@@ -450,6 +459,8 @@
                           (explicate-pred cnd B1 B2))]
     [(Let x rhs body) (let* ([body (explicate-pred body e1 e2)]) (explicate-assign rhs x body))]
     [(Begin es body) (let* ([tail (explicate-pred body e1 e2)]) (foldr explicate-effect body es))]
+    ;; Functions
+    ;; TODO apply never in pred since its stored in temp variable
     [else (error "explicate-pred unhandled case" pred)]))
 
 (define (explicate-effect e cont)
@@ -476,7 +487,10 @@
                                  [body (explicate-effect body goto_loop)]
                                  [loop (explicate-pred cnd body cont)]
                                  [_ (assign-block-to-label loop loop_sym)])
-                            goto_loop)]))
+                            goto_loop)]
+    ;; Functions
+    [(FunRef label n) cont]
+    [(Apply fun exps) (Seq (Call fun exps) cont)]))
 
 ;; explicate-tail : Lwhile -> C1 tail
 (define (explicate-tail e)
@@ -492,8 +506,16 @@
     [(Let x rhs body) (let* ([tail (explicate-tail body)] [nt (explicate-assign rhs x tail)]) nt)]
     [(If cnd e1 e2) (let* ([tail1 (explicate-tail e1)] [tail2 (explicate-tail e2)])
                       (explicate-pred cnd tail1 tail2))]
-    ;; [(SetBang x rhs) (Return (Void))]
-    ;; [(WhileLoop cnd body) (Return (Void))]
+    [(SetBang x rhs) (explicate-assign rhs x (Return Void))] 
+    [(WhileLoop cnd body) (let* ([loop_sym (gensym 'loop)]
+                                 [goto_loop (Goto loop_sym)]
+                                 [body (explicate-effect body goto_loop)]
+                                 [loop (explicate-pred cnd body (Return (Void)))]
+                                 [_ (assign-block-to-label loop loop_sym)])
+                            goto_loop)]
+    ;; Functions
+    [(FunRef label n) (Return (FunRef label n))]
+    [(Apply fun exps) (TailCall fun exps)]
     [else (error "explicate-tail unhandled case" e)]))
 
 ;; explicate_assign : Lwhile, Var x, C1 tail -> C1 tail
@@ -521,15 +543,21 @@
                                  [_ (assign-block-to-label loop loop_sym)])
                             (Seq (Assign (Var x) (Void)) goto_loop))]
     [(SetBang y rhs) (Seq (Assign (Var x) (Void)) (explicate-assign rhs y cont))]
+    ;; Functions
+    [(FunRef label n) (Seq (Assign (Var x) (FunRef label n)) cont)]
+    [(Apply fun exps) (Seq (Assign (Var x) (Call fun exps)) cont)]
     [else (error "explicate-assign unhandled case" e)]))
 
 ;; explicate-control : Lwhile -> C1
 (define (explicate-control p)
   (match p
-    [(Program info body) (CProgram info
-                                   (let* ([_ (set! blocks (make-hash))]
-                                          [a (dict-set! blocks 'start (explicate-tail body))])
-                                     blocks))]))
+    [(ProgramDefs info defs) (ProgramDefs info
+                                          (for/list ([def defs])
+                                            (set! blocks (make-hash))
+                                            (match def
+                                              [(Def name params type info exp)
+                                               (dict-set! blocks (string->symbol (string-append (symbol->string name) (symbol->string 'start))) (explicate-tail exp))
+                                               (Def name params type info (dict-copy blocks))])))]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -1101,7 +1129,7 @@
     ("expose_allocation" ,expose-allocation ,interp-Lfun-prime ,type-check-Lfun)
     ("uncover-get!" ,uncover-get! ,interp-Lfun-prime ,type-check-Lfun)
     ("remove complex opera*" ,remove-complex-opera* ,interp-Lfun-prime ,type-check-Lfun)
-    ;; ("explicate control" ,explicate-control ,interp-Cfun,type-check-Cfun)
+    ("explicate control" ,explicate-control ,interp-Cfun ,type-check-Cfun)
     ;; ("instruction selection" ,select-instructions ,interp-pseudo-x86-3)
     ;; ("liveness analysis" ,uncover_live ,interp-pseudo-x86-3)
     ;; ("build interference" ,build-interference ,interp-pseudo-x86-2)
