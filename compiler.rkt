@@ -173,19 +173,18 @@
     [else (error "Reveal functions unhandled case" e)]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-
 (define (cdddddr ls)
   (cdr (cddddr ls)))
 
 (define (limit-params params)
   (cond
     [(> (length params) 6)
-     (display params)
-     (display (take params 5))
-     (append (take params 5) (list (cons 'afsdf 'Integer)))]
+     (append (take params 5) (list (append '(tup :) (list (append '(Vector) (map third (cdddddr params)))))))]
     [else params]))
 
 (define (limit-args args)
+  (printf "printing args")
+  (display args)
   (cond
     [(> (length args) 6) (append (take args 5) (list (Prim 'vector (cdddddr args))))]
     [else args]))
@@ -195,7 +194,9 @@
   (define i 0)
   (for ([param params])
     (cond
-      [(> i 6) (dict-set! ans_dict param (Prim 'vector-ref (list 'tup (Int i))))]))
+      [(>= i 5) (dict-set! ans_dict (first param) (Prim 'vector-ref (list (Var 'tup) (Int (- i  5)))))])
+    (set! i (+ i 1))
+    )
   ans_dict)
 
 (define (convert-exp env)
@@ -217,6 +218,8 @@
       [else (error "Convert-exp unhandled case" e)])))
 
 (define (limit_functions e)
+  ;; (display e)
+  ;; (printf "\n")
   (match e
     [(ProgramDefs info defs) (ProgramDefs info (map limit_functions defs))]
     [(Var x) (Var x)]
@@ -234,9 +237,9 @@
     [(Apply fun exps) (Apply (limit_functions fun) (limit-args exps))]
     [(Def name params rty info body)
      (define new_params (limit-params params))
-     (define convert-dict (get-convert-dict new_params))
+     (define convert-dict (get-convert-dict params))
      (define new_body ((convert-exp convert-dict) body))
-     (Def name new_params rty info new_body)]
+     (Def name new_params rty info (limit_functions new_body))]
     [else (error "Limit functions unhandled case" e)]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -272,9 +275,12 @@
     [(SetBang var_sym rhs) (SetBang var_sym (expose-allocation rhs))]
     [(Prim op es) (Prim op (map expose-allocation es))]
     [(WhileLoop cnd body) (WhileLoop (expose-allocation cnd) (expose-allocation body))]
-    [(Program info e) (Program info (expose-allocation e))]))
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+    [(FunRef x n) (FunRef x n)]
+    [(Apply fun exps) (Apply (expose-allocation fun) (map expose-allocation exps))]
+    [(Def name params rty info body) (Def name params rty info (expose-allocation body))]
+    [(ProgramDefs info defs) (ProgramDefs info (map expose-allocation defs))]))
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (define (collect-set! e)
   (match e
     [(Var var) (set)]
@@ -1069,8 +1075,8 @@
     ("reveal_functions" ,reveal_functions ,interp-Lfun-prime ,type-check-Lfun)
     ("limit_functions" ,limit_functions ,interp-Lfun-prime ,type-check-Lfun)
     ("expose_allocation" ,expose-allocation ,interp-Lfun-prime ,type-check-Lfun)
-    ("uncover-get!" ,uncover-get! ,interp-Lfun-prime ,type-check-Lfun)
-    ("remove complex opera*" ,remove-complex-opera* ,interp-Lfun-prime ,type-check-Lfun)
+    ;; ("uncover-get!" ,uncover-get! ,interp-Lfun-prime ,type-check-Lfun)
+    ;; ("remove complex opera*" ,remove-complex-opera* ,interp-Lfun-prime ,type-check-Lfun)
     ;; ("explicate control" ,explicate-control ,interp-Cfun,type-check-Cfun)
     ;; ("instruction selection" ,select-instructions ,interp-pseudo-x86-3)
     ;; ("liveness analysis" ,uncover_live ,interp-pseudo-x86-3)
