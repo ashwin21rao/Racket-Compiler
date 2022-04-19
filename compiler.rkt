@@ -185,7 +185,6 @@
 
 (define (limit-args args)
   (printf "printing args")
-  (display args)
   (cond
     [(> (length args) 6) (append (take args 5) (list (Prim 'vector (cdddddr args))))]
     [else args]))
@@ -219,8 +218,6 @@
       [else (error "Convert-exp unhandled case" e)])))
 
 (define (limit_functions e)
-  ;; (display e)
-  ;; (printf "\n")
   (match e
     [(ProgramDefs info defs) (ProgramDefs info (map limit_functions defs))]
     [(Var x) (Var x)]
@@ -303,11 +300,9 @@
     [(FunRef x n) (set)]
     [(Apply fun exps) (set-union (collect-set! fun)
                                  (apply set-union (append (map collect-set! exps) (list (set)))))]
-    [(Def name params rty info body) (collect-set! body)]
-    [(ProgramDefs info defs)
-     (ProgramDefs info (apply set-union (append (map collect-set! defs) (list (set)))))]))
+    [(Def name params rty info body) (collect-set! body)]))
 
-(define (uncover-get!-exp set!-vars)
+(trace-define (uncover-get!-exp set!-vars)
   (lambda (e)
     (match e
       [(Var x) (if (set-member? set!-vars x) (GetBang x) (Var x))]
@@ -332,21 +327,19 @@
       [(FunRef x n) (FunRef x n)]
       [(Apply fun exps) (Apply ((uncover-get!-exp set!-vars) fun)
                                (map (uncover-get!-exp set!-vars) exps))]
-      [(Def name params rty info body) (Def name params rty info (uncover-get!-exp body))])))
+      [(Def name params rty info body) (Def name params rty info ((uncover-get!-exp set!-vars) body))])))
 
 (define (uncover-get! p)
   (match p
     [(ProgramDefs info defs)
-     (ProgramDefs info
-              (for/list ([def defs])
-                (define set!-vars (collect-set! def))
-                (uncover-get!-exp set!-vars) def))]))
+     (ProgramDefs info (for/list ([def defs])
+                        (define set!-vars (collect-set! def)) 
+                        ((uncover-get!-exp set!-vars) def)))]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 ;; return cons(atom, (list (cons variables exp)))
 (define (rco-atom expr)
-  (begin
     (define new_sym (gensym 'temp))
     (define new_var (Var new_sym))
     (match expr
@@ -372,13 +365,21 @@
                              [list_2 (cons new_sym (rco-exp body))]
                              [list_3 (append (list list_1) (list list_2))])
                         (cons new_var list_3))]
+      [(Apply fun es) (let* ([new_sym (gensym 'temp)]
+                           [new_var (Var new_sym)]
+                           [pairs (map rco-atom es)]
+                           [atoms (map car pairs)]
+                           [vs (append (foldr append '() (map cdr pairs))
+                                       (list (cons new_sym (Apply (rco-exp fun) atoms))))])
+                      (cons new_var vs))]
       [(Prim op es) (let* ([new_sym (gensym 'temp)]
                            [new_var (Var new_sym)]
                            [pairs (map rco-atom es)]
                            [atoms (map car pairs)]
                            [vs (append (foldr append '() (map cdr pairs))
                                        (list (cons new_sym (Prim op atoms))))])
-                      (cons new_var vs))])))
+                      (cons new_var vs))]
+      [(FunRef x n) (cons new_var (list (cons new_sym (FunRef x n))))]))
 
 (define (gen-lets lst)
   (cond
@@ -400,12 +401,16 @@
     [(GetBang x) (Var x)]
     [(WhileLoop cnd body) (WhileLoop (rco-exp cnd) (rco-exp body))]
     [(Begin es body) (Begin (map rco-exp es) (rco-exp body))]
-    [(If cmp e1 e2) (If (rco-exp cmp) (rco-exp e1) (rco-exp e2))]))
+    [(If cmp e1 e2) (If (rco-exp cmp) (rco-exp e1) (rco-exp e2))]
+    ;; Functions
+    [(FunRef x n) (FunRef x n)]
+    [(Apply fun exps) (gen-lets (cdr (rco-atom (Apply fun exps))))]
+    [(Def name params rty info body) (Def name params rty info (rco-exp body))]))
 
 ;; remove-complex-opera* : R1 -> R1
 (define (remove-complex-opera* p)
   (match p
-    [(Program info e) (Program info (rco-exp e))]))
+    [(ProgramDefs info defs) (ProgramDefs info (map rco-exp defs))]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -850,8 +855,6 @@
          (printf "~a\n" node)
          ;; get output of the node using transfer function
          (define output (transfer node input))
-         (display output)
-         (display (dict-ref mapping node))
          (cond
            [(not (equal? output (dict-ref mapping node)))
             (dict-set! mapping node output)
@@ -1095,7 +1098,7 @@
     ("limit_functions" ,limit_functions ,interp-Lfun-prime ,type-check-Lfun)
     ("expose_allocation" ,expose-allocation ,interp-Lfun-prime ,type-check-Lfun)
     ("uncover-get!" ,uncover-get! ,interp-Lfun-prime ,type-check-Lfun)
-    ;; ("remove complex opera*" ,remove-complex-opera* ,interp-Lfun-prime ,type-check-Lfun)
+    ("remove complex opera*" ,remove-complex-opera* ,interp-Lfun-prime ,type-check-Lfun)
     ;; ("explicate control" ,explicate-control ,interp-Cfun,type-check-Cfun)
     ;; ("instruction selection" ,select-instructions ,interp-pseudo-x86-3)
     ;; ("liveness analysis" ,uncover_live ,interp-pseudo-x86-3)
