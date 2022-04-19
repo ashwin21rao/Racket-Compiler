@@ -13,6 +13,7 @@
 (provide (all-defined-out))
 (require racket/trace)
 (require "interp-Lfun.rkt")
+(require "interp-Lfun-prime.rkt")
 (require "type-check-Lfun.rkt")
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -115,7 +116,7 @@
     [else (error "Shrink unhandled case" p)]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-
+(define fnames (make-hash))
 (define (uniquify-exp env)
   (lambda (e)
     (match e
@@ -133,6 +134,7 @@
       [(Prim op es) (Prim op (map (uniquify-exp env) es))]
       [(Apply fun exps) (Apply ((uniquify-exp env) fun) (map (uniquify-exp env) exps))]
       [(Def name params rty info body)
+       (dict-set! fnames name (length params))
        (set! env (dict-set env name name))
        (define new_params
          (for/list ([param params])
@@ -145,7 +147,97 @@
 ;; uniquify : R1 -> R1
 (define (uniquify p)
   (match p
-    [(ProgramDefs info defs) (ProgramDefs info (map (uniquify-exp '()) defs))]))
+    [(ProgramDefs info defs)
+     (set! fnames (make-hash))
+     (define defs2 (map (uniquify-exp '()) defs))
+     ;; (define new_info (dict-set info 'fnames fnames))
+     (ProgramDefs info defs2)]))
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(define (reveal_functions e)
+  (match e
+    [(ProgramDefs info defs) (ProgramDefs info (map reveal_functions defs))]
+    [(Var x) (if (dict-ref fnames x #f) (FunRef x (dict-ref fnames x #f)) (Var x))]
+    [(Bool b) (Bool b)]
+    [(Void) (Void)]
+    [(Int n) (Int n)]
+    [(If e1 e2 e3) (If (reveal_functions e1) (reveal_functions e2) (reveal_functions e3))]
+    [(Let x e body) (Let x (reveal_functions e) (reveal_functions body))]
+    [(Begin es body) (Begin (map reveal_functions es) (reveal_functions body))]
+    [(SetBang var_sym rhs) (SetBang var_sym (reveal_functions rhs))]
+    [(WhileLoop cnd body) (WhileLoop (reveal_functions cnd) (reveal_functions body))]
+    [(HasType exp type) (HasType (reveal_functions exp) type)]
+    [(Prim op es) (Prim op (map reveal_functions es))]
+    [(Apply fun exps) (Apply (reveal_functions fun) (map reveal_functions exps))]
+    [(Def name params rty info body) (Def name params rty info (reveal_functions body))]
+    [else (error "Reveal functions unhandled case" e)]))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(define (cdddddr ls)
+  (cdr (cddddr ls)))
+
+(define (limit-params params)
+  (cond
+    [(> (length params) 6)
+     (display params)
+     (display (take params 5))
+     (append (take params 5) (list (cons 'afsdf 'Integer)))]
+    [else params]))
+
+(define (limit-args args)
+  (cond
+    [(> (length args) 6) (append (take args 5) (list (Prim 'vector (cdddddr args))))]
+    [else args]))
+
+(define (get-convert-dict params)
+  (define ans_dict (make-hash))
+  (define i 0)
+  (for ([param params])
+    (cond
+      [(> i 6) (dict-set! ans_dict param (Prim 'vector-ref (list 'tup (Int i))))]))
+  ans_dict)
+
+(define (convert-exp env)
+  (lambda (e)
+    (match e
+      [(Var x) (dict-ref! env x (Var x))]
+      [(Bool b) (Bool b)]
+      [(Void) (Void)]
+      [(Int n) (Int n)]
+      [(If e1 e2 e3) (If ((convert-exp env) e1) ((convert-exp env) e2) ((convert-exp env) e3))]
+      [(Let x e body) (Let x ((convert-exp env) e) ((convert-exp env) body))]
+      [(Begin es body) (Begin (map (convert-exp env) es) ((convert-exp env) body))]
+      [(SetBang var_sym rhs) (SetBang var_sym ((convert-exp env) rhs))]
+      [(WhileLoop cnd body) (WhileLoop ((convert-exp env) cnd) ((convert-exp env) body))]
+      [(HasType exp type) (HasType ((convert-exp env) exp) type)]
+      [(Prim op es) (Prim op (map (convert-exp env) es))]
+      [(Apply fun exps) (Apply ((convert-exp env) fun) (map (convert-exp env) exps))]
+      [(FunRef x n) (FunRef x n)]
+      [else (error "Convert-exp unhandled case" e)])))
+
+(define (limit_functions e)
+  (match e
+    [(ProgramDefs info defs) (ProgramDefs info (map limit_functions defs))]
+    [(Var x) (Var x)]
+    [(FunRef x n) (FunRef x n)]
+    [(Bool b) (Bool b)]
+    [(Void) (Void)]
+    [(Int n) (Int n)]
+    [(If e1 e2 e3) (If (limit_functions e1) (limit_functions e2) (limit_functions e3))]
+    [(Let x e body) (Let x (limit_functions e) (limit_functions body))]
+    [(Begin es body) (Begin (map limit_functions es) (limit_functions body))]
+    [(SetBang var_sym rhs) (SetBang var_sym (limit_functions rhs))]
+    [(WhileLoop cnd body) (WhileLoop (limit_functions cnd) (limit_functions body))]
+    [(HasType exp type) (HasType (limit_functions exp) type)]
+    [(Prim op es) (Prim op (map limit_functions es))]
+    [(Apply fun exps) (Apply (limit_functions fun) (limit-args exps))]
+    [(Def name params rty info body)
+     (define new_params (limit-params params))
+     (define convert-dict (get-convert-dict new_params))
+     (define new_body ((convert-exp convert-dict) body))
+     (Def name new_params rty info new_body)]
+    [else (error "Limit functions unhandled case" e)]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (define (expose-allocation p)
@@ -974,12 +1066,14 @@
   ;; ("partial evaluation" ,pe-Lvar ,interp-Lvar)
   `(("shrink" ,shrink ,interp-Lfun ,type-check-Lfun)
     ("uniquify" ,uniquify ,interp-Lfun ,type-check-Lfun)
-    ;; ("expose_allocation" ,expose-allocation ,interp-Lvec-prime ,type-check-Lvec)
-    ;; ("uncover-get!" ,uncover-get! ,interp-Lvec-prime ,type-check-Lvec)
-    ;; ("remove complex opera*" ,remove-complex-opera* ,interp-Lvec-prime ,type-check-Lvec)
-    ;; ("explicate control" ,explicate-control ,interp-Cvec ,type-check-Cvec)
-    ;; ("instruction selection" ,select-instructions ,interp-pseudo-x86-2)
-    ;; ("liveness analysis" ,uncover_live ,interp-pseudo-x86-2)
+    ("reveal_functions" ,reveal_functions ,interp-Lfun-prime ,type-check-Lfun)
+    ("limit_functions" ,limit_functions ,interp-Lfun-prime ,type-check-Lfun)
+    ("expose_allocation" ,expose-allocation ,interp-Lfun-prime ,type-check-Lfun)
+    ("uncover-get!" ,uncover-get! ,interp-Lfun-prime ,type-check-Lfun)
+    ("remove complex opera*" ,remove-complex-opera* ,interp-Lfun-prime ,type-check-Lfun)
+    ;; ("explicate control" ,explicate-control ,interp-Cfun,type-check-Cfun)
+    ;; ("instruction selection" ,select-instructions ,interp-pseudo-x86-3)
+    ;; ("liveness analysis" ,uncover_live ,interp-pseudo-x86-3)
     ;; ("build interference" ,build-interference ,interp-pseudo-x86-2)
     ;; ("allocate registers" ,allocate-registers ,interp-pseudo-x86-2)
     ;; ("patch instructions" ,patch-instructions ,interp-x86-2)
