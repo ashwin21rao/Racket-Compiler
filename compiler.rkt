@@ -179,7 +179,8 @@
 (define (limit-params params)
   (cond
     [(> (length params) 6)
-     (append (take params 5) (list (append '(tup :) (list (append '(Vector) (map third (cdddddr params)))))))]
+     (append (take params 5)
+             (list (append '(tup :) (list (append '(Vector) (map third (cdddddr params)))))))]
     [else params]))
 
 (define (limit-args args)
@@ -194,9 +195,9 @@
   (define i 0)
   (for ([param params])
     (cond
-      [(>= i 5) (dict-set! ans_dict (first param) (Prim 'vector-ref (list (Var 'tup) (Int (- i  5)))))])
-    (set! i (+ i 1))
-    )
+      [(>= i 5)
+       (dict-set! ans_dict (first param) (Prim 'vector-ref (list (Var 'tup) (Int (- i 5)))))])
+    (set! i (+ i 1)))
   ans_dict)
 
 (define (convert-exp env)
@@ -275,6 +276,7 @@
     [(SetBang var_sym rhs) (SetBang var_sym (expose-allocation rhs))]
     [(Prim op es) (Prim op (map expose-allocation es))]
     [(WhileLoop cnd body) (WhileLoop (expose-allocation cnd) (expose-allocation body))]
+    ;; Functions
     [(FunRef x n) (FunRef x n)]
     [(Apply fun exps) (Apply (expose-allocation fun) (map expose-allocation exps))]
     [(Def name params rty info body) (Def name params rty info (expose-allocation body))]
@@ -296,32 +298,49 @@
     [(WhileLoop cnd body) (set-union (collect-set! cnd) (collect-set! body))]
     [(Prim op es) (apply set-union (append (map collect-set! es) (list (set))))]
     [(Begin es body) (set-union (apply set-union (append (map collect-set! es) (list (set))))
-                                (collect-set! body))]))
+                                (collect-set! body))]
+    ;; Functions
+    [(FunRef x n) (set)]
+    [(Apply fun exps) (set-union (collect-set! fun)
+                                 (apply set-union (append (map collect-set! exps) (list (set)))))]
+    [(Def name params rty info body) (collect-set! body)]
+    [(ProgramDefs info defs)
+     (ProgramDefs info (apply set-union (append (map collect-set! defs) (list (set)))))]))
 
-(define (uncover-get!-exp e set!-vars)
-  (match e
-    [(Var x) (if (set-member? set!-vars x) (GetBang x) (Var x))]
-    [(Bool x) (Bool x)]
-    [(Int x) (Int x)]
-    [(Void) (Void)]
-    [(Collect n) (Collect n)]
-    [(Allocate n type) (Allocate n type)]
-    [(GlobalValue n) (GlobalValue n)]
-    [(If e1 e2 e3) (If (uncover-get!-exp e1 set!-vars)
-                       (uncover-get!-exp e2 set!-vars)
-                       (uncover-get!-exp e3 set!-vars))]
-    [(Let x rhs body) (Let x (uncover-get!-exp rhs set!-vars) (uncover-get!-exp body set!-vars))]
-    [(SetBang var rhs) (SetBang var (uncover-get!-exp rhs set!-vars))]
-    [(WhileLoop cnd body) (WhileLoop (uncover-get!-exp cnd set!-vars)
-                                     (uncover-get!-exp body set!-vars))]
-    [(Prim op es) (Prim op (map (lambda (x) (uncover-get!-exp x set!-vars)) es))]
-    [(Begin es body) (Begin (map (lambda (x) (uncover-get!-exp x set!-vars)) es)
-                            (uncover-get!-exp body set!-vars))]))
+(define (uncover-get!-exp set!-vars)
+  (lambda (e)
+    (match e
+      [(Var x) (if (set-member? set!-vars x) (GetBang x) (Var x))]
+      [(Bool x) (Bool x)]
+      [(Int x) (Int x)]
+      [(Void) (Void)]
+      [(Collect n) (Collect n)]
+      [(Allocate n type) (Allocate n type)]
+      [(GlobalValue n) (GlobalValue n)]
+      [(If e1 e2 e3) (If ((uncover-get!-exp set!-vars) e1)
+                         ((uncover-get!-exp set!-vars) e2)
+                         ((uncover-get!-exp set!-vars) e3))]
+      [(Let x rhs body)
+       (Let x ((uncover-get!-exp set!-vars) rhs) ((uncover-get!-exp set!-vars) body))]
+      [(SetBang var rhs) (SetBang var ((uncover-get!-exp set!-vars) rhs))]
+      [(WhileLoop cnd body) (WhileLoop ((uncover-get!-exp set!-vars) cnd)
+                                       ((uncover-get!-exp set!-vars) body))]
+      [(Prim op es) (Prim op (map (uncover-get!-exp set!-vars) es))]
+      [(Begin es body) (Begin (map (uncover-get!-exp set!-vars) es)
+                              ((uncover-get!-exp set!-vars) body))]
+      ;; Functions
+      [(FunRef x n) (FunRef x n)]
+      [(Apply fun exps) (Apply ((uncover-get!-exp set!-vars) fun)
+                               (map (uncover-get!-exp set!-vars) exps))]
+      [(Def name params rty info body) (Def name params rty info (uncover-get!-exp body))])))
 
 (define (uncover-get! p)
   (match p
-    [(Program info e) (let ([set!-vars (collect-set! e)])
-                        (Program info (uncover-get!-exp e set!-vars)))]))
+    [(ProgramDefs info defs)
+     (ProgramDefs info
+              (for/list ([def defs])
+                (define set!-vars (collect-set! def))
+                (uncover-get!-exp set!-vars) def))]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -1075,7 +1094,7 @@
     ("reveal_functions" ,reveal_functions ,interp-Lfun-prime ,type-check-Lfun)
     ("limit_functions" ,limit_functions ,interp-Lfun-prime ,type-check-Lfun)
     ("expose_allocation" ,expose-allocation ,interp-Lfun-prime ,type-check-Lfun)
-    ;; ("uncover-get!" ,uncover-get! ,interp-Lfun-prime ,type-check-Lfun)
+    ("uncover-get!" ,uncover-get! ,interp-Lfun-prime ,type-check-Lfun)
     ;; ("remove complex opera*" ,remove-complex-opera* ,interp-Lfun-prime ,type-check-Lfun)
     ;; ("explicate control" ,explicate-control ,interp-Cfun,type-check-Cfun)
     ;; ("instruction selection" ,select-instructions ,interp-pseudo-x86-3)
