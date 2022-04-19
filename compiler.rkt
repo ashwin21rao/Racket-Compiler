@@ -302,7 +302,7 @@
                                  (apply set-union (append (map collect-set! exps) (list (set)))))]
     [(Def name params rty info body) (collect-set! body)]))
 
-(trace-define (uncover-get!-exp set!-vars)
+(define (uncover-get!-exp set!-vars)
   (lambda (e)
     (match e
       [(Var x) (if (set-member? set!-vars x) (GetBang x) (Var x))]
@@ -369,8 +369,10 @@
                            [new_var (Var new_sym)]
                            [pairs (map rco-atom es)]
                            [atoms (map car pairs)]
-                           [vs (append (foldr append '() (map cdr pairs))
-                                       (list (cons new_sym (Apply (rco-exp fun) atoms))))])
+                           [fun-ref-pair (rco-atom fun)]
+                           [fun-ref-atom (car fun-ref-pair)]
+                           [vs (append (foldr append '() (append (map cdr pairs) (list (cdr fun-ref-pair))))
+                                       (list (cons new_sym (Apply fun-ref-atom atoms))))])
                       (cons new_var vs))]
       [(Prim op es) (let* ([new_sym (gensym 'temp)]
                            [new_var (Var new_sym)]
