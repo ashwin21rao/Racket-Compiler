@@ -782,9 +782,11 @@
     (match inst
       [(Instr 'movq (list arg arg)) empty] ;; remove all moves with some source and destination
       [(Instr 'movzbq (list arg1 (Deref reg1 off1))) ;; second argument of movzbq must be a register
-       (let* ([instr1 (Instr 'movq (list (Deref reg1 off1) (Reg 'rax)))]
-              [instr2 (Instr 'movzbq (list arg1 (Reg 'rax)))])
-         (list instr1 instr2))]
+       (list (Instr 'movzbq (list arg1 (Reg 'rax))) ;; TODO backtest everything
+             (Instr 'movq (list (Reg 'rax) (Deref reg1 off1))))]
+      ;; second argument of leaq must be a register TODO make a test for it
+      [(Instr 'leaq (list arg1 (Deref reg1 off1)))
+       (list (Instr 'leaq (list arg1 (Reg 'rax))) (Instr 'movq (list (Reg 'rax) (Deref reg1 off1))))]
       [(Instr 'cmpq (list arg1 (Imm x))) ;; second argument of cmpq must not be an immediate
        (let* ([instr1 (Instr 'movq (list (Imm x) (Reg 'rax)))]
               [instr2 (Instr 'cmpq (list arg1 (Reg 'rax)))])
@@ -795,6 +797,7 @@
        (let* ([instr1 (Instr 'movq (list (Deref reg1 off1) (Reg 'rax)))]
               [instr2 (Instr op (list (Reg 'rax) (Deref reg2 off2)))])
          (list instr1 instr2))]
+      [(TailJmp target n) (list (Instr 'movq (list target (Reg 'rax))) (TailJmp (Reg 'rax) n))]
       [else inst])))
 
 (define (patch-block pr)
@@ -805,9 +808,13 @@
            error
            "Not a valid block"])))
 
+(define (patch-instructions-def def)
+  (match def
+    [(Def name params type info blocks) (Def name params type info (map patch-block blocks))]))
+
 (define (patch-instructions p)
   (match p
-    [(X86Program info blocks) (X86Program info (map patch-block blocks))]))
+    [(ProgramDefs info defs) (ProgramDefs info (map patch-instructions-def defs))]))
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 ;; prelude-and-conclusion : x86 -> x86
@@ -1142,6 +1149,37 @@
                                (let* ([color (dict-ref vtc (Var v))] [home (dict-ref cth color)])
                                  home))]
                   [else arg])))]
+
+      [(IndirectCallq arg n)
+       (IndirectCallq
+        (match arg
+          [(Var v) (if (member v tuples)
+                       (let ([offset (dict-ref root-offsets
+                                               v
+                                               (lambda ()
+                                                 (begin
+                                                   (set! counter (+ 1 counter))
+                                                   (dict-set! root-offsets v counter)
+                                                   counter)))])
+                         (Deref 'r15 (* offset 8)))
+                       (let* ([color (dict-ref vtc (Var v))] [home (dict-ref cth color)]) home))]
+          [else arg])
+        n)]
+      [(TailJmp arg n)
+       (TailJmp
+        (match arg
+          [(Var v) (if (member v tuples)
+                       (let ([offset (dict-ref root-offsets
+                                               v
+                                               (lambda ()
+                                                 (begin
+                                                   (set! counter (+ 1 counter))
+                                                   (dict-set! root-offsets v counter)
+                                                   counter)))])
+                         (Deref 'r15 (* offset 8)))
+                       (let* ([color (dict-ref vtc (Var v))] [home (dict-ref cth color)]) home))]
+          [else arg])
+        n)]
       [else inst])))
 
 (define (allocate-register-block cur_block vtc cth tuples)
@@ -1149,9 +1187,9 @@
     [(cons label (Block info instr_list))
      (cons label (Block info (allocate-register-instrs instr_list vtc cth tuples)))]))
 
-(define (allocate-registers p)
-  (match p
-    [(X86Program info blocks)
+(define (allocate-registers-def def)
+  (match def
+    [(Def name param type info blocks)
      (let* ([var-to-color (color_graph (dict-ref info 'conflicts)
                                        (dict-keys (dict-ref info 'locals-types)))]
             [info (dict-set info 'colors var-to-color)]
@@ -1170,7 +1208,11 @@
             [_ (set! counter 0)]
             [new_blocks
              (map (lambda (x) (allocate-register-block x var-to-color color-to-home tuples)) blocks)])
-       (X86Program info new_blocks))]))
+       (Def name param type info new_blocks))]))
+
+(define (allocate-registers p)
+  (match p
+    [(ProgramDefs info defs) (ProgramDefs info (map allocate-registers-def defs))]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Define the compiler passes to be used by interp-tests and the grader
@@ -1189,7 +1231,7 @@
     ("instruction selection" ,select-instructions ,interp-pseudo-x86-3)
     ("liveness analysis" ,uncover_live ,interp-pseudo-x86-3)
     ("build interference" ,build-interference ,interp-pseudo-x86-3)
-    ;; ("allocate registers" ,allocate-registers ,interp-pseudo-x86-2)
-    ;; ("patch instructions" ,patch-instructions ,interp-x86-2)
-    ;; ("prelude-and-conclusion" ,prelude-and-conclusion ,interp-x86-2)
+    ("allocate registers" ,allocate-registers ,interp-pseudo-x86-3)
+    ("patch instructions" ,patch-instructions ,interp-x86-3)
+    ;; ("prelude-and-conclusion" ,prelude-and-conclusion ,interp-x86-3)
     ))
