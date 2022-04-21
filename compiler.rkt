@@ -1014,9 +1014,9 @@
      (cons (list (Var x) (Var y)) (build-move-graph (rest instrs)))]
     [else (build-move-graph (rest instrs))]))
 
-(define (build-interference p)
-  (match p
-    [(X86Program info blocks)
+(define (build-interference-def def)
+  (match def
+    [(Def name params type info blocks)
      (let* ([instrs (flatten-one (map (lambda (blck) (Block-instr* (cdr blck))) blocks))]
             [liveness (flatten-one (map get-liveness-from-block blocks))]
             [blocks (map remove-liveness blocks)]
@@ -1038,7 +1038,11 @@
                              mg-edges
                              'num-root-spills
                              (length tuple-typed-vars))])
-       (X86Program info blocks))]))
+       (Def name params type info blocks))]))
+
+(define (build-interference p)
+  (match p
+    [(ProgramDefs info defs) (ProgramDefs info (map build-interference-def defs))]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -1184,7 +1188,7 @@
     ("explicate control" ,explicate-control ,interp-Cfun ,type-check-Cfun)
     ("instruction selection" ,select-instructions ,interp-pseudo-x86-3)
     ("liveness analysis" ,uncover_live ,interp-pseudo-x86-3)
-    ;; ("build interference" ,build-interference ,interp-pseudo-x86-2)
+    ("build interference" ,build-interference ,interp-pseudo-x86-3)
     ;; ("allocate registers" ,allocate-registers ,interp-pseudo-x86-2)
     ;; ("patch instructions" ,patch-instructions ,interp-x86-2)
     ;; ("prelude-and-conclusion" ,prelude-and-conclusion ,interp-x86-2)
