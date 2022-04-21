@@ -869,11 +869,13 @@
   (let* ([live_list (match instr
                       [(Instr 'movq (list arg1 arg2)) (list arg1)]
                       [(Instr 'movzbq (list arg1 arg2)) (list arg1)]
+                      [(Instr 'leaq (list arg1 arg2)) (list arg1)]
                       [(Instr 'set (list cc arg)) empty] ;; Read from eflags
                       [(Instr op args) args] ;; Read from eflags
-                      [(Callq x y) (map Reg
-                                        (take '(rdi rsi rdx rcx r8 r9)
-                                              y))] ;; TODO what happens if more than 6 args
+                      [(Callq x y) (map Reg (take '(rdi rsi rdx rcx r8 r9) y))]
+                      ;; Functions
+                      [(IndirectCallq x y) (map Reg (take '(rdi rsi rdx rcx r8 r9) y))]
+                      [(TailJmp x y) (map Reg (take '(rdi rsi rdx rcx r8 r9) y))]
                       [(Jmp label) empty]
                       [(JmpIf cc label) empty]
                       [else (error "Invalid instruction" instr)])]
@@ -886,6 +888,8 @@
                       [(Instr 'set (list cc arg)) (list (Reg 'rax))] ;; Only using rax for now
                       [(Instr op es) (list (last es))]
                       [(Callq x y) (map Reg '(rax rcx rdx rsi rdi r8 r9 r10 r11))]
+                      [(IndirectCallq x y) (map Reg '(rax rcx rdx rsi rdi r8 r9 r10 r11))]
+                      [(TailJmp x y) (map Reg '(rax rcx rdx rsi rdi r8 r9 r10 r11))]
                       [(Jmp label) empty]
                       [(JmpIf cc label) empty]
                       [else (error "Invalid instruction" instr)])]
@@ -937,8 +941,8 @@
   mapping)
 
 (define (transfer! blck_label live_after_set)
-  (match blck_label
-    ['conclusion (set (Reg 'rax) (Reg 'rsp))]
+  (cond
+    [(eq? blck_label (conclusion-name fn-name)) (set (Reg 'rax) (Reg 'rsp))]
     [else
      (define blck (dict-ref global-blocks blck_label))
      (define instrs (Block-instr* blck))
@@ -949,10 +953,11 @@
      (dict-set! global-blocks blck_label new_block)
      (first liveness)]))
 
-(define (uncover_live p)
+(define (uncover-live-def def)
   (set! global-blocks (make-hash))
-  (match p
-    [(X86Program info blocks)
+  (match def
+    [(Def name params type info blocks)
+     (set! fn-name name)
      (let* ([CFG (multigraph (make-hash))]
             [_ (for ([blck blocks])
                  (dict-set! global-blocks (car blck) (cdr blck))
@@ -966,8 +971,11 @@
                    0))]
             [transposed-CFG (transpose CFG)]
             [_ (analyze_dataflow transposed-CFG transfer! (set) set-union)])
-       (X86Program info (hash->list global-blocks)))]))
+       (Def name params type info (hash->list global-blocks)))]))
 
+(define (uncover_live p)
+  (match p
+    [(ProgramDefs info defs) (ProgramDefs info (map uncover-live-def defs))]))
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (define (get-interference-edges instr_k l_after)
@@ -1175,7 +1183,7 @@
     ("remove complex opera*" ,remove-complex-opera* ,interp-Lfun-prime ,type-check-Lfun)
     ("explicate control" ,explicate-control ,interp-Cfun ,type-check-Cfun)
     ("instruction selection" ,select-instructions ,interp-pseudo-x86-3)
-    ;; ("liveness analysis" ,uncover_live ,interp-pseudo-x86-3)
+    ("liveness analysis" ,uncover_live ,interp-pseudo-x86-3)
     ;; ("build interference" ,build-interference ,interp-pseudo-x86-2)
     ;; ("allocate registers" ,allocate-registers ,interp-pseudo-x86-2)
     ;; ("patch instructions" ,patch-instructions ,interp-x86-2)
