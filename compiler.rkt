@@ -506,7 +506,7 @@
     [(Let x rhs body) (let* ([tail (explicate-tail body)] [nt (explicate-assign rhs x tail)]) nt)]
     [(If cnd e1 e2) (let* ([tail1 (explicate-tail e1)] [tail2 (explicate-tail e2)])
                       (explicate-pred cnd tail1 tail2))]
-    [(SetBang x rhs) (explicate-assign rhs x (Return Void))] 
+    [(SetBang x rhs) (explicate-assign rhs x (Return Void))]
     [(WhileLoop cnd body) (let* ([loop_sym (gensym 'loop)]
                                  [goto_loop (Goto loop_sym)]
                                  [body (explicate-effect body goto_loop)]
@@ -551,13 +551,17 @@
 ;; explicate-control : Lwhile -> C1
 (define (explicate-control p)
   (match p
-    [(ProgramDefs info defs) (ProgramDefs info
-                                          (for/list ([def defs])
-                                            (set! blocks (make-hash))
-                                            (match def
-                                              [(Def name params type info exp)
-                                               (dict-set! blocks (string->symbol (string-append (symbol->string name) (symbol->string 'start))) (explicate-tail exp))
-                                               (Def name params type info (dict-copy blocks))])))]))
+    [(ProgramDefs info defs)
+     (ProgramDefs
+      info
+      (for/list ([def defs])
+        (set! blocks (make-hash))
+        (match def
+          [(Def name params type info exp)
+           (dict-set! blocks
+                      (string->symbol (string-append (symbol->string name) (symbol->string 'start)))
+                      (explicate-tail exp))
+           (Def name params type info (dict-copy blocks))])))]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -676,7 +680,26 @@
             [instr2 (Instr 'set (list (select-instructions-cmp cmp) (Reg 'al)))]
             [instr3 (Instr 'movzbq (list (Reg 'al) x))])
        (list instr1 instr2 instr3))]
+    ;; Functions
+    [(Assign x (FunRef label n)) (list (Instr 'leaq (list (Global label) x)))]
+    [(Assign x (Call fun args))
+     (define regs (map Reg '(rdi rsi rdx rcx r8 r9)))
+     (define instrs_mov_args
+       (for/list ([arg args] [reg regs])
+         (Instr 'movq (list (select-instructions-atm arg) reg))))
+     (define call_instr (IndirectCallq fun (length args)))
+     (define res_move (Instr 'movq (list (Reg 'rax) x)))
+     (flatten (list instrs_mov_args call_instr res_move))]
+    ;; Reassign variable
     [(Assign x y) (let* ([instr1 (Instr 'movq (list (select-instructions-atm y) x))]) (list instr1))]
+    ;; Tails
+    [(TailCall fun args)
+     (define regs (map Reg '(rdi rsi rdx rcx r8 r9)))
+     (define instrs_mov_args
+       (for/list ([arg args] [reg regs])
+         (Instr 'movq (list (select-instructions-atm arg) reg))))
+     (define call_instr (TailJmp fun (length args)))
+     (flatten (list instrs_mov_args call_instr))]
     [(Goto label) (list (Jmp label))]
     [(IfStmt (Prim cmp (list a1 a2)) (Goto l1) (Goto l2))
      (let* ([instr1 (Instr 'cmpq
@@ -685,18 +708,39 @@
             [instr2 (JmpIf (select-instructions-cmp cmp) l1)]
             [instr3 (Jmp l2)])
        (list instr1 instr2 instr3))]
-    [(Return e)
-     (let * ([instrs (select-instructions-exp (Assign (Reg 'rax) e))] [instr2 (Jmp 'conclusion)])
-       (append instrs (list instr2)))]))
+    [(Return e) (let * ([instrs (select-instructions-exp (Assign (Reg 'rax) e))]
+                        [instr2 (Jmp (conclusion-name fn-name))])
+                  (append instrs (list instr2)))]))
 
 (define (select-instructions-block blck)
   (match blck
     [(cons label cmds) (cons label (Block '() (select-instructions-exp cmds)))]))
 
+(define (start-name name)
+  (string->symbol (string-append (symbol->string name) (symbol->string 'start))))
+
+(define (conclusion-name name)
+  (string->symbol (string-append (symbol->string name) (symbol->string 'conclusion))))
+(define fn-name 'abcd)
+(define (select-instructions-def def)
+  (match def
+    [(Def name params type info body)
+     (set! fn-name name)
+     (define regs (map Reg '(rdi rsi rdx rcx r8 r9)))
+     (define new_instrs empty)
+     (for ([param params] [reg regs])
+       (set! new_instrs (append new_instrs (list (Instr 'movq (list reg (Var (car param))))))))
+     (define new_body (map select-instructions-block (hash->list body)))
+     (define instrs_for_start (Block-instr* (dict-ref new_body (start-name name))))
+     (define newer_body
+       (dict-set new_body (start-name name) (Block '() (append new_instrs instrs_for_start))))
+     (define new_info (dict-set info 'num-params (length params)))
+     (Def name '() type new_info newer_body)]))
+
 ;; select-instructions : C0 -> pseudo-x86
 (define (select-instructions p)
   (match p
-    [(CProgram info blocks) (X86Program info (map select-instructions-block (hash->list blocks)))]))
+    [(ProgramDefs info defs) (ProgramDefs info (map select-instructions-def defs))]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -1130,7 +1174,7 @@
     ("uncover-get!" ,uncover-get! ,interp-Lfun-prime ,type-check-Lfun)
     ("remove complex opera*" ,remove-complex-opera* ,interp-Lfun-prime ,type-check-Lfun)
     ("explicate control" ,explicate-control ,interp-Cfun ,type-check-Cfun)
-    ;; ("instruction selection" ,select-instructions ,interp-pseudo-x86-3)
+    ("instruction selection" ,select-instructions ,interp-pseudo-x86-3)
     ;; ("liveness analysis" ,uncover_live ,interp-pseudo-x86-3)
     ;; ("build interference" ,build-interference ,interp-pseudo-x86-2)
     ;; ("allocate registers" ,allocate-registers ,interp-pseudo-x86-2)
