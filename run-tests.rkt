@@ -30,14 +30,15 @@
 ;; (interp-tests "int" #f compiler-passes interp-Lvar "int_test" (tests-for "int"))
 ;; (interp-tests "var" #f compiler-passes interp-Lvar "var_test" (tests-for "var"))
 ;; (interp-tests "cond" type-check-Lwhile compiler-passes interp-Lwhile "cond_test" (tests-for "cond"))
-(interp-tests "while" type-check-Lfun compiler-passes interp-Lfun "while_test" (tests-for "while"))
-(interp-tests "vectors" type-check-Lfun compiler-passes interp-Lfun "vectors_test" (tests-for "vectors"))
-(interp-tests "functions" type-check-Lfun compiler-passes interp-Lfun "functions_test" (tests-for "functions"))
+;; (interp-tests "while" type-check-Lfun compiler-passes interp-Lfun "while_test" (tests-for "while"))
+;; (interp-tests "vectors" type-check-Lfun compiler-passes interp-Lfun "vectors_test" (tests-for "vectors"))
+;; (interp-tests "functions" type-check-Lfun compiler-passes interp-Lfun "functions_test" (tests-for "functions"))
 
 ;; Uncomment the following when all the passes are complete to
 ;; test the final x86 code.
-;; (compiler-tests "var" type-check-Lwhile compiler-passes "var_test" (tests-for "var"))
-;; (compiler-tests "cond" type-check-Lwhile compiler-passes "cond_test" (tests-for "cond"))
-;; (compiler-tests "while" type-check-Lwhile compiler-passes "while_test" (tests-for "while"))
-;; (compiler-tests "vectors" type-check-Lvec compiler-passes "vectors_test" (tests-for "vectors"))
+;; (compiler-tests "var" type-check-Lfun compiler-passes "var_test" (tests-for "var"))
+;; (compiler-tests "cond" type-check-Lfun compiler-passes "cond_test" (tests-for "cond"))
+;; (compiler-tests "while" type-check-Lfun compiler-passes "while_test" (tests-for "while"))
+;; (compiler-tests "vectors" type-check-Lfun compiler-passes "vectors_test" (tests-for "vectors"))
+(compiler-tests "functions" type-check-Lfun compiler-passes "functions_test" (tests-for "functions"))
 

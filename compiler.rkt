@@ -818,52 +818,59 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 ;; prelude-and-conclusion : x86 -> x86
+
+(define (pnc-def def)
+  (match def
+    [(Def name params type info blocks)
+     (set! fn-name name)
+     (let* ([stacksize (* 8 (length (dict-keys (dict-ref info 'locals-types))))]
+            [stacksize (+ stacksize (modulo stacksize 16))]
+            [callee-saved (dict-ref info 'used_callee)]
+            [instr1 (Instr 'pushq (list (Reg 'rbp)))]
+            [instr2 (Instr 'movq (list (Reg 'rsp) (Reg 'rbp)))]
+            [instr-callee-push (for/list ([reg callee-saved])
+                                 (Instr 'pushq (list reg)))]
+            [instr-callee-pop (for/list ([reg callee-saved])
+                                (Instr 'popq (list reg)))]
+            [callee-size (* 8 (length callee-saved))]
+            [spills (dict-ref info 'num_spilled)]
+            [local_var_size (* 8 spills)]
+            [stacksize (+ callee-size local_var_size)]
+            [stacksize (+ stacksize (modulo stacksize 16))]
+            [stacksize (- stacksize callee-size)]
+            [root-stack-instrs (list (Instr 'movq (list (Imm 65536) (Reg 'rdi)))
+                                     (Instr 'movq (list (Imm 65536) (Reg 'rsi)))
+                                     (Callq 'initialize 2)
+                                     (Instr 'movq (list (Global 'rootstack_begin) (Reg 'r15))))]
+            [root-stack-instrs2 (make-list (dict-ref info 'num-root-spills)
+                                           (list (Instr 'movq (list (Imm 0) (Deref 'r15 0)))
+                                                 (Instr 'addq (list (Imm 8) (Reg 'r15)))))]
+            [instr3 (Instr 'subq (list (Imm stacksize) (Reg 'rsp)))]
+            [instr4 (Jmp (start-name fn-name))]
+            [instr_mov_r15 (Instr 'subq (list (Imm (* 8 (dict-ref info 'num-root-spills))) (Reg 'r15)))]
+            [instr5 (Instr 'addq (list (Imm stacksize) (Reg 'rsp)))]
+            [instr6 (Instr 'popq (list (Reg 'rbp)))]
+            [instr7 (Retq)]
+
+            [main_block
+             (if (eq? fn-name 'main)
+                 (Block empty
+                        (flatten (list instr1
+                                       instr2
+                                       instr-callee-push
+                                       instr3
+                                       root-stack-instrs
+                                       root-stack-instrs2
+                                       instr4)))
+
+                 (Block empty (flatten (list instr1 instr2 instr-callee-push root-stack-instrs2 instr3 instr4))))]
+            [conclusion_block (Block empty (flatten (list instr5 instr-callee-pop instr_mov_r15 instr6 instr7)))]
+            [blocks (dict-set* blocks fn-name main_block (conclusion-name fn-name) conclusion_block)])
+       blocks)]))
+
 (define (prelude-and-conclusion p)
   (match p
-    [(X86Program info blocks)
-     (X86Program
-      info
-      (let* ([stacksize (* 8 (length (dict-keys (dict-ref info 'locals-types))))]
-             [stacksize (+ stacksize (modulo stacksize 16))]
-             [callee-saved (dict-ref info 'used_callee)]
-             [instr1 (Instr 'pushq (list (Reg 'rbp)))]
-             [instr2 (Instr 'movq (list (Reg 'rsp) (Reg 'rbp)))]
-             [instr-callee-push (for/list ([reg callee-saved])
-                                  (Instr 'pushq (list reg)))]
-             [instr-callee-pop (for/list ([reg callee-saved])
-                                 (Instr 'popq (list reg)))]
-             [callee-size (* 8 (length callee-saved))]
-             [spills (dict-ref info 'num_spilled)]
-             [local_var_size (* 8 spills)]
-             [stacksize (+ callee-size local_var_size)]
-             [stacksize (+ stacksize (modulo stacksize 16))]
-             [stacksize (- stacksize callee-size)]
-             [root-stack-instrs (list (Instr 'movq (list (Imm 65536) (Reg 'rdi)))
-                                      (Instr 'movq (list (Imm 65536) (Reg 'rsi)))
-                                      (Callq 'initialize 2)
-                                      (Instr 'movq (list (Global 'rootstack_begin) (Reg 'r15))))]
-             [root-stack-instrs2 (make-list (dict-ref info 'num-root-spills)
-                                            (list (Instr 'movq (list (Imm 0) (Deref 'r15 0)))
-                                                  (Instr 'addq (list (Imm 8) (Reg 'r15)))))]
-             [instr3 (Instr 'subq (list (Imm stacksize) (Reg 'rsp)))]
-             [instr4 (Jmp 'start)]
-             [instr44 (Instr 'subq (list (Imm (* 8 (dict-ref info 'num-root-spills))) (Reg 'r15)))]
-             [instr5 (Instr 'addq (list (Imm stacksize) (Reg 'rsp)))]
-             [instr6 (Instr 'popq (list (Reg 'rbp)))]
-             [instr7 (Retq)]
-
-             [main_block (Block empty
-                                (flatten (list instr1
-                                               instr2
-                                               instr-callee-push
-                                               instr3
-                                               root-stack-instrs
-                                               root-stack-instrs2
-                                               instr4)))]
-             [conclusion_block
-              (Block empty (flatten (list instr44 instr5 instr-callee-pop instr6 instr7)))]
-             [blocks (dict-set* blocks 'main main_block 'conclusion conclusion_block)])
-        blocks))]))
+    [(ProgramDefs info defs) (X86Program info (flatten-one (map pnc-def defs)))]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -1195,7 +1202,7 @@
             [info (dict-set info 'colors var-to-color)]
             [colors (list->set (filter (lambda (x) (>= x 0)) (map cdr var-to-color)))]
             [used_callee
-             (map Reg '(rbx r12 r13 r14 r15))] ;; assume we are using all the callee saved registers
+             (map Reg '(rbx r12 r13 r14))] ;; assume we are using all the callee saved registers
             [num_used_callee (set-count used_callee)]
             [color-to-home (get-color-to-home colors num_used_callee)]
             [num_spilled (length (filter (lambda (x) (Deref? (cdr x))) color-to-home))]
@@ -1233,5 +1240,4 @@
     ("build interference" ,build-interference ,interp-pseudo-x86-3)
     ("allocate registers" ,allocate-registers ,interp-pseudo-x86-3)
     ("patch instructions" ,patch-instructions ,interp-x86-3)
-    ;; ("prelude-and-conclusion" ,prelude-and-conclusion ,interp-x86-3)
-    ))
+    ("prelude-and-conclusion" ,prelude-and-conclusion ,interp-x86-3)))
