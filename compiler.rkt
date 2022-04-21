@@ -888,8 +888,8 @@
                       [(Instr op args) args] ;; Read from eflags
                       [(Callq x y) (map Reg (take '(rdi rsi rdx rcx r8 r9) y))]
                       ;; Functions
-                      [(IndirectCallq x y) (map Reg (take '(rdi rsi rdx rcx r8 r9) y))]
-                      [(TailJmp x y) (map Reg (take '(rdi rsi rdx rcx r8 r9) y))]
+                      [(IndirectCallq x y) (append (list x) (map Reg (take '(rdi rsi rdx rcx r8 r9) y)))]
+                      [(TailJmp x y) (append (list x) (map Reg (take '(rdi rsi rdx rcx r8 r9) y)))]
                       [(Jmp label) empty]
                       [(JmpIf cc label) empty]
                       [else (error "Invalid instruction" instr)])]
@@ -1028,6 +1028,11 @@
      (cons (list (Var x) (Var y)) (build-move-graph (rest instrs)))]
     [else (build-move-graph (rest instrs))]))
 
+(define (is_tuple type)
+    (match type
+      [(cons var_name type) (and (list? type) (eq? (first type) 'Vector))] ;; TODO test with vector functions
+      ))
+
 (define (build-interference-def def)
   (match def
     [(Def name params type info blocks)
@@ -1036,7 +1041,7 @@
             [blocks (map remove-liveness blocks)]
             [types (dict-ref info 'locals-types)]
             [edges (map get-interference-edges instrs liveness)]
-            [tuple-typed-vars (map car (filter (lambda (x) (list? (cdr x))) types))]
+            [tuple-typed-vars (map car (filter (lambda (x) (is_tuple x)) types))]
             [callee-saved (map Reg '(rax rcx rdx rsi rdi r8 r9 r10 r11 rsp rbp rbx r12 r13 r14 r15))]
             [edges2 (cartesian-product tuple-typed-vars callee-saved)]
             [edges (append edges edges2)]
@@ -1210,7 +1215,7 @@
             [info (dict-set info 'num_spilled num_spilled)]
             [info (dict-set info 'homes color-to-home)]
             [info (dict-remove info 'liveness)]
-            [tuples (map car (filter (lambda (x) (list? (cdr x))) (dict-ref info 'locals-types)))]
+            [tuples (map car (filter (lambda (x) (is_tuple x)) (dict-ref info 'locals-types)))]
             [_ (set! root-offsets (make-hash))]
             [_ (set! counter 0)]
             [new_blocks
