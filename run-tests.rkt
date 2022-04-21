@@ -10,7 +10,7 @@
 (require "type-check-Lfun.rkt")
 (require "compiler.rkt")
 (debug-level 1)
-(AST-output-syntax 'concrete-syntax)
+;; (AST-output-syntax 'concrete-syntax)
 
 
 ;; all the files in the tests/ directory with extension ".rkt".

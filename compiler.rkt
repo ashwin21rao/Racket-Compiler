@@ -186,7 +186,6 @@
     [else params]))
 
 (define (limit-args args)
-  (printf "printing args")
   (cond
     [(> (length args) 6) (append (take args 5) (list (Prim 'vector (cdddddr args))))]
     [else args]))
@@ -415,7 +414,7 @@
     [(If cmp e1 e2) (If (rco-exp cmp) (rco-exp e1) (rco-exp e2))]
     ;; Functions
     [(FunRef x n) (FunRef x n)]
-    [(Apply fun exps) (gen-lets-extra (cdr (rco-atom (Apply fun exps))))]
+    [(Apply fun exps) (gen-lets (cdr (rco-atom (Apply fun exps))))]
     [(Def name params rty info body) (Def name params rty info (rco-exp body))]))
 
 ;; remove-complex-opera* : R1 -> R1
@@ -818,6 +817,22 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 ;; prelude-and-conclusion : x86 -> x86
+(define (all-but-last lst)
+  (match lst
+    [(list) empty]
+    [else (reverse (cdr (reverse lst)))]))
+
+(define (remove-tail-jmps replacement)
+  (lambda (blck)
+    (match blck
+      [(cons label (Block info instrs))
+       (define last_instr (last instrs))
+       (define new_instrs
+         (match last_instr
+           [(TailJmp x n) (append replacement (list (IndirectJmp x)))]
+           [else (list last_instr)]))
+       (cons label (Block info (flatten (append (all-but-last instrs) new_instrs))))]
+      [else (error "undefined for remove tail jumps" blck)])))
 
 (define (pnc-def def)
   (match def
@@ -847,7 +862,8 @@
                                                  (Instr 'addq (list (Imm 8) (Reg 'r15)))))]
             [instr3 (Instr 'subq (list (Imm stacksize) (Reg 'rsp)))]
             [instr4 (Jmp (start-name fn-name))]
-            [instr_mov_r15 (Instr 'subq (list (Imm (* 8 (dict-ref info 'num-root-spills))) (Reg 'r15)))]
+            [instr_mov_r15
+             (Instr 'subq (list (Imm (* 8 (dict-ref info 'num-root-spills))) (Reg 'r15)))]
             [instr5 (Instr 'addq (list (Imm stacksize) (Reg 'rsp)))]
             [instr6 (Instr 'popq (list (Reg 'rbp)))]
             [instr7 (Retq)]
@@ -863,10 +879,16 @@
                                        root-stack-instrs2
                                        instr4)))
 
-                 (Block empty (flatten (list instr1 instr2 instr-callee-push root-stack-instrs2 instr3 instr4))))]
-            [conclusion_block (Block empty (flatten (list instr5 instr-callee-pop instr_mov_r15 instr6 instr7)))]
+                 (Block empty
+                        (flatten
+                         (list instr1 instr2 instr-callee-push root-stack-instrs2 instr3 instr4))))]
+            [conclusion_block
+             (Block empty (flatten (list instr5 instr-callee-pop instr_mov_r15 instr6 instr7)))]
+            [replace_by (list instr5 instr-callee-pop instr_mov_r15 instr6)]
+            [blocks (map (remove-tail-jmps replace_by) blocks)]
             [blocks (dict-set* blocks fn-name main_block (conclusion-name fn-name) conclusion_block)])
-       blocks)]))
+       blocks)]
+    [else (error "Unhandled case in pnc-def" def)]))
 
 (define (prelude-and-conclusion p)
   (match p
@@ -880,19 +902,20 @@
   (list->set (filter (lambda (x) (or (Var? x) (Reg? x))) lst)))
 
 (define (instr-location-read instr)
-  (let* ([live_list (match instr
-                      [(Instr 'movq (list arg1 arg2)) (list arg1)]
-                      [(Instr 'movzbq (list arg1 arg2)) (list arg1)]
-                      [(Instr 'leaq (list arg1 arg2)) (list arg1)]
-                      [(Instr 'set (list cc arg)) empty] ;; Read from eflags
-                      [(Instr op args) args] ;; Read from eflags
-                      [(Callq x y) (map Reg (take '(rdi rsi rdx rcx r8 r9) y))]
-                      ;; Functions
-                      [(IndirectCallq x y) (append (list x) (map Reg (take '(rdi rsi rdx rcx r8 r9) y)))]
-                      [(TailJmp x y) (append (list x) (map Reg (take '(rdi rsi rdx rcx r8 r9) y)))]
-                      [(Jmp label) empty]
-                      [(JmpIf cc label) empty]
-                      [else (error "Invalid instruction" instr)])]
+  (let* ([live_list
+          (match instr
+            [(Instr 'movq (list arg1 arg2)) (list arg1)]
+            [(Instr 'movzbq (list arg1 arg2)) (list arg1)]
+            [(Instr 'leaq (list arg1 arg2)) (list arg1)]
+            [(Instr 'set (list cc arg)) empty] ;; Read from eflags
+            [(Instr op args) args] ;; Read from eflags
+            [(Callq x y) (map Reg (take '(rdi rsi rdx rcx r8 r9) y))]
+            ;; Functions
+            [(IndirectCallq x y) (append (list x) (map Reg (take '(rdi rsi rdx rcx r8 r9) y)))]
+            [(TailJmp x y) (append (list x) (map Reg (take '(rdi rsi rdx rcx r8 r9) y)))]
+            [(Jmp label) empty]
+            [(JmpIf cc label) empty]
+            [else (error "Invalid instruction" instr)])]
          [filter_list (filter (lambda (x) (or (Var? x) (Reg? x))) live_list)])
     (list->set filter_list)))
 
@@ -963,19 +986,22 @@
      (define info (Block-info blck))
      (define liveness (uncover-live-instrs instrs live_after_set))
      (define info_new (dict-set info 'liveness liveness))
+     (printf "writing liveness for ~a ~a" blck_label info_new)
      (define new_block (Block info_new instrs))
      (dict-set! global-blocks blck_label new_block)
      (first liveness)]))
 
 (define (uncover-live-def def)
-  (set! global-blocks (make-hash))
   (match def
     [(Def name params type info blocks)
+     (set! global-blocks (make-hash))
      (set! fn-name name)
+     (printf "getting liveness for ~a" fn-name)
      (let* ([CFG (multigraph (make-hash))]
             [_ (for ([blck blocks])
                  (dict-set! global-blocks (car blck) (cdr blck))
                  (let* ([label (car blck)]
+                        [_ (add-vertex! CFG label)]
                         [instrs (Block-instr* (cdr blck))]
                         [_ (for ([instr instrs])
                              (match instr
@@ -1029,9 +1055,10 @@
     [else (build-move-graph (rest instrs))]))
 
 (define (is_tuple type)
-    (match type
-      [(cons var_name type) (and (list? type) (eq? (first type) 'Vector))] ;; TODO test with vector functions
-      ))
+  (match type
+    [(cons var_name type)
+     (and (list? type) (eq? (first type) 'Vector))] ;; TODO test with vector functions
+    ))
 
 (define (build-interference-def def)
   (match def
@@ -1245,5 +1272,4 @@
     ("build interference" ,build-interference ,interp-pseudo-x86-3)
     ("allocate registers" ,allocate-registers ,interp-pseudo-x86-3)
     ("patch instructions" ,patch-instructions ,interp-x86-3)
-    ("prelude-and-conclusion" ,prelude-and-conclusion ,interp-x86-3)
-    ))
+    ("prelude-and-conclusion" ,prelude-and-conclusion ,interp-x86-3)))
