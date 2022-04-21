@@ -830,7 +830,7 @@
             [instr2 (Instr 'movq (list (Reg 'rsp) (Reg 'rbp)))]
             [instr-callee-push (for/list ([reg callee-saved])
                                  (Instr 'pushq (list reg)))]
-            [instr-callee-pop (for/list ([reg callee-saved])
+            [instr-callee-pop (for/list ([reg (reverse callee-saved)])
                                 (Instr 'popq (list reg)))]
             [callee-size (* 8 (length callee-saved))]
             [spills (dict-ref info 'num_spilled)]
@@ -1241,5 +1241,4 @@
     ("allocate registers" ,allocate-registers ,interp-pseudo-x86-3)
     ("patch instructions" ,patch-instructions ,interp-x86-3)
     ("prelude-and-conclusion" ,prelude-and-conclusion ,interp-x86-3)
-
     ))
