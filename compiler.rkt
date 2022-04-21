@@ -1240,4 +1240,6 @@
     ("build interference" ,build-interference ,interp-pseudo-x86-3)
     ("allocate registers" ,allocate-registers ,interp-pseudo-x86-3)
     ("patch instructions" ,patch-instructions ,interp-x86-3)
-    ("prelude-and-conclusion" ,prelude-and-conclusion ,interp-x86-3)))
+    ("prelude-and-conclusion" ,prelude-and-conclusion ,interp-x86-3)
+
+    ))
