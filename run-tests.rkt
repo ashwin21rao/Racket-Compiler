@@ -37,8 +37,8 @@
 
 ;; Uncomment the following when all the passes are complete to
 ;; test the final x86 code.
-(compiler-tests "var" type-check-Lfun compiler-passes "var_test" (tests-for "var"))
-(compiler-tests "cond" type-check-Lfun compiler-passes "cond_test" (tests-for "cond"))
+;; (compiler-tests "var" type-check-Lfun compiler-passes "var_test" (tests-for "var"))
+;; (compiler-tests "cond" type-check-Lfun compiler-passes "cond_test" (tests-for "cond"))
 (compiler-tests "while" type-check-Lfun compiler-passes "while_test" (tests-for "while"))
 (compiler-tests "vectors" type-check-Lfun compiler-passes "vectors_test" (tests-for "vectors"))
 (compiler-tests "functions" type-check-Lfun compiler-passes "functions_test" (tests-for "functions"))
