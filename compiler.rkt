@@ -962,12 +962,12 @@
   (while (not (queue-empty? worklist))
          ;; get top label from queue
          (define node (dequeue! worklist))
-         (printf "~a\n" node)
+         ;; (printf "~a\n" node)
          ;; do set union over all the mappings of neighbours of node
          (define input
            (for/fold ([state bottom]) ([pred (in-neighbors trans-G node)])
              (join state (dict-ref mapping pred))))
-         (printf "~a\n" node)
+         ;; (printf "~a\n" node)
          ;; get output of the node using transfer function
          (define output (transfer node input))
          (cond
@@ -986,7 +986,7 @@
      (define info (Block-info blck))
      (define liveness (uncover-live-instrs instrs live_after_set))
      (define info_new (dict-set info 'liveness liveness))
-     (printf "writing liveness for ~a ~a" blck_label info_new)
+     ;; (printf "writing liveness for ~a ~a" blck_label info_new)
      (define new_block (Block info_new instrs))
      (dict-set! global-blocks blck_label new_block)
      (first liveness)]))
@@ -996,7 +996,7 @@
     [(Def name params type info blocks)
      (set! global-blocks (make-hash))
      (set! fn-name name)
-     (printf "getting liveness for ~a" fn-name)
+     ;; (printf "getting liveness for ~a" fn-name)
      (let* ([CFG (multigraph (make-hash))]
             [_ (for ([blck blocks])
                  (dict-set! global-blocks (car blck) (cdr blck))
@@ -1067,21 +1067,22 @@
             [liveness (flatten-one (map get-liveness-from-block blocks))]
             [blocks (map remove-liveness blocks)]
             [types (dict-ref info 'locals-types)]
-            [edges (map get-interference-edges instrs liveness)]
-            [tuple-typed-vars (map car (filter (lambda (x) (is_tuple x)) types))]
-            [callee-saved (map Reg '(rax rcx rdx rsi rdi r8 r9 r10 r11 rsp rbp rbx r12 r13 r14 r15))]
+            [edges (flatten-one (map get-interference-edges instrs liveness))]
+            [tuple-typed-vars (map Var (map car (filter (lambda (x) (is_tuple x)) types)))]
+            [callee-saved (map Reg '(rax rcx rdx rsi rdi r8 r9 r10 r11 rsp rbp rbx r12 r13 r14))]
             [edges2 (cartesian-product tuple-typed-vars callee-saved)]
+            ;; [_ (printf "fn name ~a\n" name)]
+            ;; [_ (printf "edges69 2 ~a\n" edges2)]
+            ;; [_ (printf "edges69 1 ~a\n" edges)]
             [edges (append edges edges2)]
-            [graph (undirected-graph (foldr append '() edges))]
-            [mg (undirected-graph (build-move-graph instrs))]
-            [mg-edges (get-edges mg)]
+
+            
+            [graph (undirected-graph edges)]
             [info (dict-set* info
                              'conflicts
                              graph
-                             'move-graph
-                             mg
-                             'mg-edges
-                             mg-edges
+                             'edges
+                             edges
                              'num-root-spills
                              (length tuple-typed-vars))])
        (Def name params type info blocks))]))
@@ -1113,7 +1114,9 @@
     (pqueue-decrease-key! pq handle))) ;; tell pq to change order
 
 (define (update-saturations graph handles var color pq)
+  (printf "\n update saturs ~a ~a\n" (get-vertices graph) var)
   (define neighbours (sequence->list (in-neighbors graph var)))
+  (printf "\n did the call to in neighbors \n")
   (define var_neighbours (filter Var? neighbours)) ;; update only the saturation of variables
   (for ([neighbour var_neighbours])
     (define handle
@@ -1229,6 +1232,7 @@
 (define (allocate-registers-def def)
   (match def
     [(Def name param type info blocks)
+     (printf "vertices89 ~a" (get-edges (dict-ref info 'conflicts)))
      (let* ([var-to-color (color_graph (dict-ref info 'conflicts)
                                        (dict-keys (dict-ref info 'locals-types)))]
             [info (dict-set info 'colors var-to-color)]
@@ -1273,3 +1277,4 @@
     ("allocate registers" ,allocate-registers ,interp-pseudo-x86-3)
     ("patch instructions" ,patch-instructions ,interp-x86-3)
     ("prelude-and-conclusion" ,prelude-and-conclusion ,interp-x86-3)))
+    ;;))
