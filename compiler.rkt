@@ -1114,9 +1114,9 @@
     (pqueue-decrease-key! pq handle))) ;; tell pq to change order
 
 (define (update-saturations graph handles var color pq)
-  (printf "\n update saturs ~a ~a\n" (get-vertices graph) var)
+  ; (printf "\n update saturs ~a ~a\n" (get-vertices graph) var)
   (define neighbours (sequence->list (in-neighbors graph var)))
-  (printf "\n did the call to in neighbors \n")
+  ;; (printf "\n did the call to in neighbors \n")
   (define var_neighbours (filter Var? neighbours)) ;; update only the saturation of variables
   (for ([neighbour var_neighbours])
     (define handle
@@ -1232,7 +1232,7 @@
 (define (allocate-registers-def def)
   (match def
     [(Def name param type info blocks)
-     (printf "vertices89 ~a" (get-edges (dict-ref info 'conflicts)))
+     ;; (printf "vertices89 ~a" (get-edges (dict-ref info 'conflicts)))
      (let* ([var-to-color (color_graph (dict-ref info 'conflicts)
                                        (dict-keys (dict-ref info 'locals-types)))]
             [info (dict-set info 'colors var-to-color)]
