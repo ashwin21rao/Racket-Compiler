@@ -707,6 +707,13 @@
      (define call_instr (TailJmp fun (length args)))
      (flatten (list instrs_mov_args call_instr))]
     [(Goto label) (list (Jmp label))]
+    [(IfStmt (Prim 'vector-ref (list a1 (Int pos))) (Goto l1) (Goto l2))
+     (let* ([instrs (select-instructions-exp (Assign (Reg 'rax) (Prim 'vector-ref (list a1 (Int pos)))))]
+            [instr1 (Instr 'cmpq
+                           (list (Reg 'rax) (Imm 1)))] ;; Args flipped in cmpq
+            [instr2 (JmpIf 'e l1)]
+            [instr3 (Jmp l2)])
+       (flatten (list instrs instr1 instr2 instr3)))]
     [(IfStmt (Prim cmp (list a1 a2)) (Goto l1) (Goto l2))
      (let* ([instr1 (Instr 'cmpq
                            (list (select-instructions-atm a2)
@@ -919,7 +926,7 @@
             [(Callq x y) (map Reg (take '(rdi rsi rdx rcx r8 r9) y))]
             ;; Functions
             [(IndirectCallq x y) (append (list x) (map Reg (take '(rdi rsi rdx rcx r8 r9) y)))]
-            [(TailJmp x y) (append (list x) (map Reg (take '(rdi rsi rdx rcx r8 r9) y)))]
+            [(TailJmp x y) (append (list x) (list (Reg 'rax) (Reg 'rsp)) (map Reg (take '(rdi rsi rdx rcx r8 r9) y)))]
             [(Jmp label) empty]
             [(JmpIf cc label) empty]
             [else (error "Invalid instruction" instr)])]
@@ -931,9 +938,9 @@
                       [(Instr 'cmpq es) empty]
                       [(Instr 'set (list cc arg)) (list (Reg 'rax))] ;; Only using rax for now
                       [(Instr op es) (list (last es))]
-                      [(Callq x y) (map Reg '(rax rcx rdx rsi rdi r8 r9 r10 r11))]
-                      [(IndirectCallq x y) (map Reg '(rax rcx rdx rsi rdi r8 r9 r10 r11))]
-                      [(TailJmp x y) (map Reg '(rax rcx rdx rsi rdi r8 r9 r10 r11))]
+                      [(Callq x y) (map Reg '(rcx rdx rsi rdi r8 r9 r10 r11))]
+                      [(IndirectCallq x y) (map Reg '(rcx rdx rsi rdi r8 r9 r10 r11))]
+                      [(TailJmp x y) (map Reg '(rcx rdx rsi rdi r8 r9 r10 r11))]
                       [(Jmp label) empty]
                       [(JmpIf cc label) empty]
                       [else (error "Invalid instruction" instr)])]
@@ -1082,8 +1089,6 @@
             ;; [_ (printf "edges69 2 ~a\n" edges2)]
             ;; [_ (printf "edges69 1 ~a\n" edges)]
             [edges (append edges edges2)]
-
-            
             [graph (undirected-graph edges)]
             [info (dict-set* info
                              'conflicts
@@ -1283,5 +1288,5 @@
     ("build interference" ,build-interference ,interp-pseudo-x86-3)
     ("allocate registers" ,allocate-registers ,interp-pseudo-x86-3)
     ("patch instructions" ,patch-instructions ,interp-x86-3)
-    ("prelude-and-conclusion" ,prelude-and-conclusion ,interp-x86-3)))
+    ("prelude-and-conclusion" ,prelude-and-conclusion ,#f)))
     ;;))
