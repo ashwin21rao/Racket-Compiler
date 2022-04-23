@@ -641,6 +641,13 @@
             [instr3 (Instr 'movq (list (Imm (get-tag n type)) (Deref 'r11 0)))]
             [instr4 (Instr 'movq (list (Reg 'r11) x))])
        (list instr1 instr2 instr3 instr4))]
+    [(Call fun args)
+     (define regs (map Reg '(rdi rsi rdx rcx r8 r9)))
+     (define instrs_mov_args
+       (for/list ([arg args] [reg regs])
+         (Instr 'movq (list (select-instructions-atm arg) reg))))
+     (define call_instr (IndirectCallq fun (length args)))
+     (flatten (list instrs_mov_args call_instr))]
     [(Prim 'vector-set! (list vec (Int pos) an_exp)) ;; vector ref can be a statement
      (let* ([instr1 (Instr 'movq (list vec (Reg 'r11)))]
             [instr2
@@ -650,7 +657,7 @@
      (let* ([instr1 (Instr 'movq (list vec (Reg 'r11)))]
             [instr2
              (Instr 'movq (list (select-instructions-atm an_exp) (Deref 'r11 (* (+ 1 pos) 8))))]
-            [instr3 (Instr 'movq (list (Var x) (Imm 0)))])
+            [instr3 (Instr 'movq (list (Imm 0) x))])
        (list instr1 instr2 instr3))]
     [(Assign x (Prim 'vector-ref (list vec (Int pos))))
      (let* ([instr1 (Instr 'movq (list vec (Reg 'r11)))]
