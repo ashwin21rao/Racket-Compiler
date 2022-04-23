@@ -15,4 +15,4 @@
 (define (len [x : (Vector Integer Integer Integer Integer Integer Integer)]): Integer
     (vector-length x)
   )
-((pass 1 inc dec) (vector-ref (add (vector 1 41 3)) 5))
+((pass 2 inc dec) (vector-ref (add (vector 43 41 3)) 0))
