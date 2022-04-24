@@ -523,6 +523,7 @@
     [(Var y) (Seq (Assign (Var x) (Var y)) cont)]
     [(Int n) (Seq (Assign (Var x) (Int n)) cont)]
     [(Bool b) (Seq (Assign (Var x) (Bool b)) cont)]
+    [(Void) (Seq (Assign (Var x) (Void)) cont)]
     [(Collect n) (Seq (Assign (Var x) (Collect n)) cont)]
     [(Allocate n type) (Seq (Assign (Var x) (Allocate n type)) cont)]
     [(GlobalValue n) (Seq (Assign (Var x) (GlobalValue n)) cont)]
